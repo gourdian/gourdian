@@ -1,3 +1,4 @@
+import itertools
 import more_itertools
 import numbers
 import numpy as np
@@ -105,7 +106,7 @@ def parse_hows(hows, require=(), bind_layout=None, errors=lib_errors.RAISE):
 
 def fit_snug_hows(hows, layouts, errors_missing=lib_errors.RAISE):
   """Returns Hows bound as tightly as possible to a set of layouts."""
-  def how_snug_labeler(how, layouts, step_fudge=1.0):
+  def how_snug_labeler(how, layouts):
     if how.target.labeler is not None:
       # How.target has a labeler; may be LabelColumnTarget or GTypeLabelerTarget.
       gtype = how.target.gtype
@@ -140,8 +141,6 @@ def fit_snug_hows(hows, layouts, errors_missing=lib_errors.RAISE):
       gtype = how.target.gtype
       snug_step = gtype.SANE_STEP
       snug_head = pdutils.coalesce(gtype.HEAD, 0)
-    # Make the snug_labeler slightly higher resolution than required by the minimums.
-    snug_step *= step_fudge
     return gtype.labeler(step=snug_step, head=snug_head)
 
   def fit_how(how, layouts, errors_missing):
@@ -530,60 +529,93 @@ def labels_to_filenames(labels_df, gz_ok=True):
   return ret.rename('filename')
 
 
-####################################################################################################
-# LAYOUT JOINING
+def _overlaps_range(old, new):
+  for (old_head, old_bomb), (new_head, new_bomb), in zip(old, new):
+    if (new_head > old_bomb) or (new_bomb < old_head):
+      # Either new_head or new_bomb is outside the old range.
+      return False
+  return True
+
+
+def _collapse_ranges(lower_df, upper_df):
+  assert lower_df.shape == upper_df.shape
+  old = None
+  for (_, *heads), (_, *bombs) in zip(lower_df.itertuples(), upper_df.itertuples()):
+    new = list(list(x) for x in zip(heads, bombs))
+    if old is None:
+      old = new
+    elif _overlaps_range(old=old, new=new):
+      # The new range overlaps the old range, but the old range may need to be enlarged.
+      for old_hb, new_hb in zip(old, new):
+        old_head, old_bomb = old_hb
+        new_head, new_bomb = new_hb
+        if (new_head < old_head):
+          # The new head is smaller than old head, but is within min_step of it; enlarge old.
+          old_hb[0] = new_head
+        if (new_bomb > old_bomb):
+          # The new bomb is larger than old bomb, but is within min_step of it; enlarge old.
+          old_hb[1] = new_bomb
+    else:
+      # The new range does not overlap the old range; emit the old range and keep new as old.
+      yield old
+      old = new
+  # Emit the final range.
+  yield old
+
+
+def _collapse_dfs(lower_df, upper_df):
+  # Two ranges can be merged if their values overlap for every column.
+  collapsed_lower_df = lower_df
+  collapsed_upper_df = upper_df
+  # Permute all orderings of columns to ensure we get all possible collapses.
+  # TODO(rob): Is this required? How to improve? This is so lazy.
+  for lower_cols, upper_cols in zip(itertools.permutations(lower_df.columns),
+                                    itertools.permutations(upper_df.columns)):
+    collapsed_lower_df = collapsed_lower_df.reindex(columns=lower_cols)
+    collapsed_upper_df = collapsed_upper_df.reindex(columns=upper_cols)
+    ranges = tuple(_collapse_ranges(lower_df=collapsed_lower_df, upper_df=collapsed_upper_df))
+    collapsed_lower_df = pd.DataFrame([[c[0] for c in row] for row in ranges], columns=lower_cols)
+    collapsed_upper_df = pd.DataFrame([[c[1] for c in row] for row in ranges], columns=upper_cols)
+  # Return dfs back to original column order.
+  collapsed_lower_df = collapsed_lower_df.reindex(columns=lower_df.columns)
+  collapsed_upper_df = collapsed_upper_df.reindex(columns=upper_df.columns)
+  # Recurse if the number of rows was reduced; more reductions may be possible.
+  if len(lower_df) > len(collapsed_lower_df):
+    # TODO(rob): Why is this recursion step required? Probably a bug...
+    return _collapse_dfs(lower_df=collapsed_lower_df, upper_df=collapsed_upper_df)
+  return collapsed_lower_df, collapsed_upper_df
+
+
 def df_to_query(df, hows, endpointer=None, client=None, errors_missing=lib_errors.DROP):
-  # TODO(rob): This code creates Queries that fetch too much data; revise to yield multiple Queries?
-  # df_to_query([(2010, usa), (2020, canada)]) will produce a Query that fetches 4 chunks:
-  #   [chunk(2010, canada), chunk(2010, usa), chunk(2020, canada), chunk(2020, usa)]
-  # In reality, only 2 are needed!
   layouts = _layouts(endpointer=endpointer, client=client)
   # 1. Fit hows as snugly as possible to target layouts.
   hows = parse_hows(hows=hows)
   fit_hows = fit_snug_hows(hows=hows, layouts=layouts, errors_missing=errors_missing)
-  # 2. Extract buckets from df using fit_hows.
+  # 2. Extract lower and upper gtypes_df, accounting for any bounds present in hows.
   gtypes_lower_df, gtypes_upper_df = df_to_gtype_bounds(df=df, hows=fit_hows)
-  # Account for munged column names in gtypes_df.
+  # 3. Extract buckets from df using fit_hows, accounting for munged column names in gtypes_df.
   munged_hows = [h.clone(via_column=h.name, name=h.name) for h in fit_hows]
-  buckets_lower_df = gtypes_to_buckets(gtypes_df=gtypes_lower_df, hows=munged_hows)
-  buckets_upper_df = gtypes_to_buckets(gtypes_df=gtypes_upper_df, hows=munged_hows)
-  # 3. De-dupe the bucket values and collapse them into contigious ranges, grouped by original hows.
-  how_head_bombs = {}
-  for how, fit_how in zip(hows, fit_hows):
-    how_bucket_ranges = np.column_stack([
-      buckets_lower_df[fit_how.name],
-      buckets_upper_df[fit_how.name]
-    ])
-    # Remove rows where df[col] could not be coaxed into gtype.
-    incomplete_mask = np.any(np.isnan(how_bucket_ranges), axis=1)
-    how_bucket_ranges = how_bucket_ranges[~incomplete_mask]
-    # De-dupe all ranges by keeping just the unique ones.
-    how_unique_ranges = np.unique(how_bucket_ranges, axis=0)
-    # Walk over unique bucket ranges sorted by their lower value, merging them into contiguous ones.
-    how_sorted_ranges = how_unique_ranges[np.lexsort((how_unique_ranges[:, 0],))]
-    min_step = fit_how.target.labeler.step
-    head_tails = []
-    for lower, upper in how_sorted_ranges:
-      if len(head_tails) == 0:
-        # This is the first range encountered; keep it.
-        head_tails.append([lower, upper])
-      elif (lower - head_tails[-1][1]) <= min_step:
-        # This range fits within min_step of the last range; make the last range larger.
-        head_tails[-1][1] = upper
-      else:
-        # This range begins at least min_step away from where the last range ends; create new range.
-        head_tails.append([lower, upper])
-    # Convert head_tails (inclusive) to head_bombs (exclusive) by bumping out the tails slightly.
-    epsilon = min_step * 0.001
-    how_head_bombs[how] = tuple((h, t + epsilon) for h, t in head_tails)
-  # 4. Convert how_head_bombs into SequenceFilters and return Query.
-  sequence_filters = [queries.SequenceFilter(target=h.target, head_bombs=hb)
-                      for h, hb in how_head_bombs.items()]
-  return queries.Query(sequence_filters=sequence_filters)
-
-
-def df_to_layout_match(df, hows, endpointer, client=None, errors_missing=lib_errors.DROP):
-  layouts = _layouts(endpointer=endpointer, client=client)
-  query = df_to_query(df=df, hows=hows, endpointer=endpointer, client=client,
-                      errors_missing=errors_missing)
-  return query.match_layouts(layouts=layouts)
+  buckets_lower_df = gtypes_to_buckets(gtypes_df=gtypes_lower_df, hows=munged_hows).add_suffix(':<')
+  buckets_upper_df = gtypes_to_buckets(gtypes_df=gtypes_upper_df, hows=munged_hows).add_suffix(':>')
+  buckets_upper_df = buckets_upper_df + [h.target.labeler.step for h in fit_hows]
+  assert buckets_lower_df.shape == buckets_upper_df.shape
+  # 4. De-dupe bucket ranges by concatenating lower+upper and dropping dupes, and sort by heads.
+  unique_range_df = pd.concat((buckets_lower_df, buckets_upper_df), axis=1).drop_duplicates()
+  unique_range_df = unique_range_df.sort_values(by=list(buckets_lower_df.columns))
+  unique_lower_df = unique_range_df.iloc[:, :len(buckets_lower_df.columns)]
+  unique_upper_df = unique_range_df.iloc[:, len(buckets_lower_df.columns):]
+  # 5. Merge sorted ranges into contiguous ranges spaced at least min_step apart.
+  lower_df, upper_df = _collapse_dfs(lower_df=unique_lower_df, upper_df=unique_upper_df)
+  # 6. Convert ranges to QueryAnd subqueries.
+  subqueries = []
+  for (_, *heads), (_, *bombs) in zip(lower_df.itertuples(), upper_df.itertuples()):
+    sequence_filters = []
+    for how, head, bomb in zip(hows, heads, bombs):
+      filt = queries.SequenceFilter(
+        target=how.target,
+        head_bombs=[(head, bomb)],
+      )
+      sequence_filters.append(filt)
+    subqueries.append(queries.QueryAnd(sequence_filters=sequence_filters))
+  # 7. Return a Query made up of all subqueries.
+  return queries.Query(subqueries=subqueries)

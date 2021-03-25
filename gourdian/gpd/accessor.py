@@ -1,6 +1,7 @@
 import pandas as pd
 
 from gourdian.gpd import gpd
+from gourdian.lib import lib
 
 
 @pd.api.extensions.register_dataframe_accessor('gourdian')
@@ -33,6 +34,8 @@ class GourdianAccessor:
     """Returns Query approximately representing the rows in this dataframe."""
     return gpd.df_to_query(df=self._df, hows=how, endpointer=endpointer)
 
-  def join(self, how, endpointer):
-    """Fetches and returns chunks of endpointer that overlap with df."""
-    pass
+  def match(self, how, endpointer):
+    """Returns a LayoutMatch object representing the best match between df and endpointer."""
+    query = self.query(how=how, endpointer=endpointer)
+    layouts = gpd._layouts(endpointer=endpointer)
+    return query.match_layouts(layouts=layouts)

@@ -305,8 +305,10 @@ class Dataset(Endpoint):
     else:
       generated_at_str = None
     # Format available sources.
-    tables_parts = ['- %s (%s rows)' % (x.name, strutils.format_number(x.layouts[0].num_rows()))
-                    for x in self.tables]
+    tables_parts = []
+    for table in self.tables:
+      num_rows_str = strutils.format_number(table.layouts[0].num_rows())
+      tables_parts.append('- %s (%s rows)' % (table.name, num_rows_str))
     tables_str = '\n'.join(tables_parts)
     parts = [
       '# %s' % (self.display_name,),
@@ -436,6 +438,15 @@ class Table(Endpoint):
 
   def describe(self, f=sys.stdout):
     columns_str = '\n'.join('- %s' % (c,) for c in self.columns)
+    layout_parts = []
+    for layout in self.layouts:
+      layout_parts.append('- %s' % (layout.name,))
+      for label_column in sorted(layout.label_columns, key=lambda x: x.name):
+        head = label_column.sequence.head
+        bomb = label_column.sequence.bomb
+        layout_parts.append('  + %s' % (str(label_column.labeler()),))
+        layout_parts.append('    - [%r ... %r] (len=%r)' % (head, bomb, bomb-head))
+    layouts_str = '\n'.join(layout_parts)
     parts = [
       '# %s' % (self.display_name,),
       'Endpointer: `%s`' % (self.endpointer,),
@@ -447,6 +458,9 @@ class Table(Endpoint):
       '' if self.homepage_url or self.download_url else None,
       '## Columns (%d)' % (len(self.columns),),
       columns_str,
+      '',
+      '## Layouts (%d)' % (len(self.layouts),),
+      layouts_str,
     ]
     ret = '\n'.join(p for p in parts if p is not None)
     if not f:
@@ -851,10 +865,17 @@ class LayoutChunk:
     return self._label
 
   @property
+  def indices(self):
+    return self.layout.sequence.left_indices_of(values=self.bucket)
+
+  @property
   def filename(self):
     if self._filename is None:
       self._filename = api_fetch.layout_chunk_filename(label=self.label)
     return self._filename
+
+  def num_rows(self):
+    return self.layout.array(name='num_rows').values()[self.indices]
 
   def df(self):
     return self.client.chunk_df(

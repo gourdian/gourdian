@@ -1,3 +1,4 @@
+import math
 import more_itertools
 import numpy as np
 import pandas as pd
@@ -6,10 +7,12 @@ import sys
 from gourdian.gpd import gpd
 from gourdian.lib import errors as lib_errors
 from gourdian.utils import pdutils
+from gourdian.utils import strutils
 
 
-def parse_sequence_filters():
-  pass
+_UNSET = object()
+
+COERCE = lib_errors.COERCE
 
 
 class SequenceFilter:
@@ -26,6 +29,12 @@ class SequenceFilter:
   def __iter__(self):
     return iter(self._head_bombs)
 
+  def clone(self, target=_UNSET, head_bombs=_UNSET):
+    return SequenceFilter(
+      target=pdutils.coalesce(target, self.target, unset=_UNSET),
+      head_bombs=pdutils.coalesce(head_bombs, self.head_bombs, unset=_UNSET),
+    )
+
   @property
   def target(self):
     return self._target
@@ -35,39 +44,91 @@ class SequenceFilter:
     return self._head_bombs
 
 
-class Query:
+class QueryAnd:
   def __init__(self, sequence_filters):
     self._sequence_filters = tuple(sequence_filters)
 
   def __repr__(self):
-    hb_str = ' '.join('%s=%r' % (filt.target.name, filt._head_bombs)
-                      for filt in self._sequence_filters)
-    return '<%s %s>' % (self.__class__.__name__, hb_str)
-
-  def describe(self, f=sys.stdout):
-    filt_parts = []
-    for filt in self.sequence_filters:
-      filt_parts.append('- %s (%d ranges)' % (filt.target.name, len(filt.head_bombs)))
-      filt_parts.extend(['  - (%r ... %r)' % (h, b) for h, b in filt.head_bombs])
-    parts = [
-      '# Query Sequence Filters (%d)' % (len(self.sequence_filters),),
-      '\n'.join(filt_parts),
-    ]
-    ret = '\n'.join(p for p in parts if p is not None)
-    if not f:
-      return f
-    f.write(ret)
-    f.flush()
+    filts = {f.target.name: f.head_bombs for f in self.sequence_filters}
+    return '<%s %r>' % (self.__class__.__name__, filts)
 
   @property
   def sequence_filters(self):
     return self._sequence_filters
 
-  def layout_match(self, layout):
-    return LayoutMatch(query=self, layout=layout)
+  def match_sequence_filters(self, layout):
+    for filt in self.sequence_filters:
+      try:
+        target = filt.target.bind_layout(layout=layout)
+        yield filt.clone(target=target)
+      except lib_errors.NoLabelColumnsError:
+        pass
 
-  def layout_matches(self, layouts):
-    return tuple(self.layout_match(layout=x) for x in layouts)
+  def match_ok_chunk_mask(self, layout):
+    ok_chunk_mask = np.ones(shape=layout.sequence.shape, dtype=bool)
+    assert ok_chunk_mask.shape == layout.sequence.shape
+    for filt in self.match_sequence_filters(layout=layout):
+      label_column = filt.target.label_column
+      column_index = label_column.column_index
+      seq = label_column.sequence
+      # Disable everything in ok_chunk_mask that does not match filt.
+      filt_bad_mask = np.ones(shape=seq.shape, dtype=bool)
+      for head, bomb in filt.head_bombs:
+        head_index = seq.left_index_of(value=head, errors=COERCE)
+        bomb_index = seq.right_index_of(value=bomb, errors=COERCE)
+        filt_bad_mask[slice(head_index, bomb_index)] = False
+      filt_bad_selector = ([slice(None)] * column_index) + [filt_bad_mask]
+      ok_chunk_mask[tuple(filt_bad_selector)] = False
+    return ok_chunk_mask
+
+
+class Query:
+  def __init__(self, subqueries):
+    self._subqueries = subqueries
+
+  def __repr__(self):
+    return '<%s subqueries=%r>' % (self.__class__.__name__, self.subqueries)
+
+  def describe(self, f=sys.stdout):
+    subquery_parts = []
+    for subquery in self.subqueries:
+      subquery_parts.append('- OR')
+      for filt in subquery.sequence_filters:
+        subquery_parts.append('  + %s' % (filt.target.name,))
+        subquery_parts.extend('    - [%r ... %r] (len=%r)' % (h, b, b-h)
+                              for h, b in filt.head_bombs)
+    subquery_str = '\n'.join(p for p in subquery_parts if p is not None)
+    parts = [
+      '# Query (%d subqueries)' % (len(self.subqueries),),
+      subquery_str,
+    ]
+    ret = '\n'.join(p for p in parts if p is not None)
+    if not f:
+      return ret
+    f.write(ret)
+    f.write('\n')
+    f.flush()
+
+  @property
+  def subqueries(self):
+    return self._subqueries
+
+  def match_ok_chunk_mask(self, layout):
+    ok_chunk_mask = np.zeros(shape=layout.sequence.shape, dtype=bool)
+    for subquery in self.subqueries:
+      subquery_ok_chunk_mask = subquery.match_ok_chunk_mask(layout=layout)
+      ok_chunk_mask = np.logical_or(ok_chunk_mask, subquery_ok_chunk_mask)
+    return ok_chunk_mask
+
+  def layout_match(self, layout):
+    ok_chunk_mask = self.match_ok_chunk_mask(layout=layout)
+    return LayoutMatch(query=self, layout=layout, ok_chunk_mask=ok_chunk_mask)
+
+  def all_layout_matches(self, layouts, fetch_all_stats=True):
+    for layout in layouts:
+      layout_match = self.layout_match(layout=layout)
+      layout_match.fetch_all_stats()
+      yield layout_match
 
   def match_layouts(self, layouts):
     """Returns a LayoutMatch for the most efficient way to satisfy this query against some table.
@@ -80,7 +141,7 @@ class Query:
     5. If > 1 layouts remain, discard all but the first one sorted alphabetically by layout name
     """
     # 0. If there is only 1 layout, it is automatically the best.
-    layout_matches = self.layout_matches(layouts=layouts)
+    layout_matches = tuple(self.all_layout_matches(layouts=layouts, fetch_all_stats=False))
     if len(layout_matches) < 2:
       return more_itertools.first(layout_matches, default=None)
     # 1. Keep plans that need the fewest rows.
@@ -112,11 +173,12 @@ class Query:
 
 
 class LayoutMatch:
-  def __init__(self, query, layout):
+  def __init__(self, query, layout, ok_chunk_mask):
     self._query = query
     self._layout = layout
+    self._ok_chunk_mask = ok_chunk_mask
     # Placeholders.
-    self._ok_chunk_mask = None
+    self._matched_chunk_mask = None
     self._matched_sequence_filters = None
     self._matched_num_columns = None
     self._matched_num_chunks = None
@@ -132,14 +194,56 @@ class LayoutMatch:
     gz_bytes = pdutils.coalesce(self._matched_gz_bytes, '?')
     parts = [
       'chunks=%s' % (num_chunks,),
-      'rows=%s' % (num_rows,),
-      'csv_bytes=%s' % (csv_bytes,),
-      'gz_bytes=%s' % (gz_bytes,),
-      'cols=%d' % (self.matched_num_columns(),),
-      repr([x.target.name for x in self.matched_sequence_filters()]),
+      'rows=%s' % (strutils.format_number(num_rows, units=strutils.NUMBER_UNITS),),
+      'csv_bytes=%s' % (strutils.format_number(csv_bytes, units=strutils.SI_UNITS),),
+      'gz_bytes=%s' % (strutils.format_number(gz_bytes, units=strutils.SI_UNITS),),
     ]
     return '<%s %r %s>' % (self.__class__.__name__, str(self.layout),
                            ' '.join(x for x in parts if x))
+
+  def describe(self, f=sys.stdout, max_chunks=10):
+    # Stats.
+    num_rows_str = strutils.format_number(self.matched_num_rows())
+    num_chunks_str = strutils.format_number(self.matched_num_chunks())
+    csv_bytes_str = strutils.format_number(self.matched_csv_bytes(), units=strutils.BYTE_UNITS)
+    gz_bytes_str = strutils.format_number(self.matched_gz_bytes(), units=strutils.BYTE_UNITS)
+    # Chunks.
+    matched_chunks = self.matched_chunks()
+    head_max_chunks = math.ceil(max_chunks / 2)
+    tail_max_chunks = math.floor(max_chunks / 2)
+    tail_max_chunks = min(tail_max_chunks, max(0, len(matched_chunks) - head_max_chunks))
+    chunks_parts = [
+      '\n'.join(['- %s (%d rows)' % (x.filename, x.num_rows())
+                 for x in matched_chunks[:head_max_chunks]]),
+      '...' if len(matched_chunks) > max_chunks else None,
+      '\n'.join(['- %s (%d rows)' % (x.filename, x.num_rows())
+                 for x in matched_chunks[-tail_max_chunks:]])
+    ]
+    chunks_parts = [p for p in chunks_parts if p]
+    chunks_str = '\n'.join(chunks_parts)
+    # Layout steps.
+    label_column_parts = ['- %s: %s' % (x.name, x.labeler()) for x in self.layout.label_columns]
+    # Assemble.
+    parts = [
+      '# LayoutMatch',
+      'Endpointer: `%s`' % (self.layout.endpointer,),
+      '',
+      '## Stats',
+      'Matched: %s rows (across %s chunks)' % (num_rows_str, num_chunks_str),
+      'Filesize: %s (%s uncompressed)' % (gz_bytes_str, csv_bytes_str),
+      '',
+      '## Matched Label Columns (%d)' % (len(self.layout.label_columns),),
+      '\n'.join(label_column_parts) if label_column_parts else None,
+      '',
+      '## Chunks (%d)' % (self.matched_num_chunks(),),
+      chunks_str or None,
+    ]
+    ret = '\n'.join(p for p in parts if p is not None)
+    if not f:
+      return ret
+    f.write(ret)
+    f.write('\n')
+    f.flush()
 
   @property
   def client(self):
@@ -153,77 +257,43 @@ class LayoutMatch:
   def layout(self):
     return self._layout
 
+  @property
   def ok_chunk_mask(self):
-    if self._ok_chunk_mask is None:
-      layout = self.layout
-      # Each sequence_filter mask is combined with AND against an initial "all" mask.
-      ok_chunk_mask = np.ones(shape=layout.sequence.shape, dtype=bool)
-      for sequence_filter in self.matched_sequence_filters():
-        # Dropout parts of ok_chunk_mask that do not overlap with this sequence_filter.
-        target = sequence_filter.target.bind_layout(layout=self.layout)
-        label_column = target.label_column
-        column_index, seq = label_column.column_index, label_column.sequence
-        # Each (head, bomb) mask is combined with OR against an initial "none" mask.
-        ok_filt_mask = np.zeros(shape=ok_chunk_mask.shape, dtype=bool)
-        for head, bomb in sequence_filter.head_bombs:
-          head_index = seq.left_index_of(value=head, errors='coerce')
-          bomb_index = seq.right_index_of(value=bomb, errors='coerce')
-          selector = tuple([slice(None)] * column_index + [slice(head_index, bomb_index)])
-          ok_filt_mask[selector] = True
-        ok_chunk_mask = np.logical_and(ok_chunk_mask, ok_filt_mask)
-      # Filter out hit chunks that contain 0 rows.
-      array_num_rows = layout.array(name='num_rows').values()
-      self._ok_chunk_mask = np.logical_and(ok_chunk_mask, array_num_rows)
     return self._ok_chunk_mask
 
-  def matched_sequence_filters(self):
-    if self._matched_sequence_filters is None:
-      ret = []
-      for filt in self.query.sequence_filters:
-        try:
-          _ = filt.target.bind_layout(layout=self.layout)
-          ret.append(filt)
-        except lib_errors.NoLabelColumnsError:
-          pass
-      self._matched_sequence_filters = tuple(ret)
-    return self._matched_sequence_filters
-
-  def matched_num_columns(self):
-    if self._matched_num_columns is None:
-      self._matched_num_columns = len(self.matched_sequence_filters())
-    return self._matched_num_columns
+  @property
+  def matched_chunk_mask(self):
+    if self._matched_chunk_mask is None:
+      # Filter out hit chunks that contain 0 rows.
+      array_num_rows = self.layout.array(name='num_rows').values()
+      self._matched_chunk_mask = np.logical_and(self.ok_chunk_mask, array_num_rows)
+    return self._matched_chunk_mask
 
   def matched_num_chunks(self):
     if self._matched_num_chunks is None:
-      ok_mask = self.ok_chunk_mask()
-      self._matched_num_chunks = ok_mask.sum()
+      self._matched_num_chunks = self.matched_chunk_mask.sum()
     return self._matched_num_chunks
 
   def matched_num_rows(self):
     if self._matched_num_rows is None:
-      ok_mask = self.ok_chunk_mask()
       array_num_rows = self.layout.array(name='num_rows').values()
-      self._matched_num_rows = array_num_rows[ok_mask].sum()
+      self._matched_num_rows = array_num_rows[self.matched_chunk_mask].sum()
     return self._matched_num_rows
 
   def matched_csv_bytes(self):
     if self._matched_csv_bytes is None:
-      ok_mask = self.ok_chunk_mask()
       array_csv_bytes = self.layout.array(name='csv_bytes').values()
-      self._matched_csv_bytes = array_csv_bytes[ok_mask].sum()
+      self._matched_csv_bytes = array_csv_bytes[self.matched_chunk_mask].sum()
     return self._matched_csv_bytes
 
   def matched_gz_bytes(self):
     if self._matched_gz_bytes is None:
-      ok_mask = self.ok_chunk_mask()
       array_gz_bytes = self.layout.array(name='gz_bytes').values()
-      self._matched_gz_bytes = array_gz_bytes[ok_mask].sum()
+      self._matched_gz_bytes = array_gz_bytes[self.matched_chunk_mask].sum()
     return self._matched_gz_bytes
 
   def fetch_all_stats(self):
     return {
-      'columns_matched': [x.target for x in self.matched_sequence_filters()],
-      'matched_num_columns': self.matched_num_columns(),
       'matched_num_chunks': self.matched_num_chunks(),
       'matched_num_rows': self.matched_num_rows(),
       'matched_csv_bytes': self.matched_csv_bytes(),
@@ -236,8 +306,7 @@ class LayoutMatch:
     If all buckets are required, this method is more performant than iterating
     self.matched_chunks().
     """
-    ok_mask = self.ok_chunk_mask()
-    bucket_indices = np.argwhere(ok_mask)
+    bucket_indices = np.argwhere(self.matched_chunk_mask)
     seq_steps, seq_heads = zip(*[(seq.step, seq.head) for seq in self.layout.sequence.sequences])
     buckets = (bucket_indices * seq_steps) + seq_heads
     return pd.DataFrame(buckets, columns=[x.name for x in self.layout.label_columns])

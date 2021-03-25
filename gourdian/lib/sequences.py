@@ -36,6 +36,10 @@ class Sequence:
   def shape(self):
     return (len(self),)
 
+  @property
+  def size(self):
+    return len(self)
+
   def left_index_of(self, value, errors=lib_errors.RAISE):
     lib_errors.validate_errors(errors, coerce_ok=True, ignore_ok=True, raise_ok=True)
     if value < self.head:
@@ -101,6 +105,10 @@ class MultiSequence:
   def shape(self):
     return tuple(len(s) for s in self.sequences)
 
+  @property
+  def size(self):
+    return len(self)
+
   def index_to_indices(self, index):
     if index < 0 or index >= len(self):
       raise IndexError('index out of bounds (len=%d): %r' % (len(self), index))
@@ -111,6 +119,9 @@ class MultiSequence:
       stride = stride * len(seq)
       indices.insert(0, seq_index)
     return tuple(indices)
+
+  def left_indices_of(self, values, errors=lib_errors.RAISE):
+    return tuple(s.left_index_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
 
   def to_js(self):
     return [s.to_js() for s in self.sequences]
