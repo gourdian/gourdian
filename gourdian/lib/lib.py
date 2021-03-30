@@ -202,10 +202,6 @@ class Manifest:
     return self._dataset
 
   @property
-  def client(self):
-    return self._client
-
-  @property
   def user(self):
     return self.dataset.user
 
@@ -733,6 +729,10 @@ class LabelColumn:
   @property
   def super_gtype(self):
     return self.gtype.super_gtype
+
+  @property
+  def label_kwargs(self):
+    return dict(self._label_kwargs)
 
   def labeler(self):
     return self.gtype.labeler(**self._label_kwargs)
