@@ -2,7 +2,6 @@ import bisect
 import collections
 import itertools
 import logging
-import math
 import multiprocessing
 import os.path
 import pathlib
@@ -12,16 +11,10 @@ from concurrent import futures
 
 from gourdian.utils import csvutils
 from gourdian.utils import pdutils
+from gourdian.utils import strutils
+
 
 NUM_CPUS = multiprocessing.cpu_count()
-
-
-def human_format(num):
-  # https://stackoverflow.com/a/45478574/195125
-  units = ('', 'K', 'M', 'G', 'T', 'P')
-  k = 1000.0
-  magnitude = int(math.floor(math.log(num, k)))
-  return '%0.02f%s' % (num / k**magnitude, units[magnitude])
 
 
 FileSplit = collections.namedtuple('FileSplit', ('group_num', 'requires_split', 'size_range'))
@@ -102,7 +95,8 @@ class Group:
     self.chunk_size = []
 
   def __repr__(self):
-    return '<Group %s chunks=%d>' % (human_format(num=sum(self.chunk_size)), len(self.chunks))
+    size_str = strutils.format_number(num=sum(self.chunk_size))
+    return '<Group %s chunks=%d>' % (size_str, len(self.chunks))
 
   def to_js(self):
     return {
