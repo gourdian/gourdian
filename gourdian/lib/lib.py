@@ -262,6 +262,7 @@ class Dataset(Endpoint):
       name=dataset_js['name'],
       display_name=dataset_js['display_name'],
       description=dataset_js['description'],
+      short_description=dataset_js['short_description'],
       homepage_url=dataset_js['homepage_url'],
       download_url=dataset_js['download_url'],
       license_text=dataset_js['license_text'],
@@ -272,13 +273,14 @@ class Dataset(Endpoint):
       dataset.add_table(table=table)
     return dataset
 
-  def __init__(self, user, name, display_name=None, description=None, homepage_url=None,
-               download_url=None, license_text=None, license_url=None):
+  def __init__(self, user, name, display_name=None, description=None, short_description=None,
+               homepage_url=None, download_url=None, license_text=None, license_url=None):
     super().__init__()
     self._user = user
     self._name = name
     self._display_name = display_name
     self._description = description
+    self._short_description = short_description
     self._homepage_url = homepage_url
     self._download_url = download_url
     self._license_text = license_text
@@ -372,6 +374,10 @@ class Dataset(Endpoint):
     return self._description
 
   @property
+  def short_description(self):
+    return self._short_description
+
+  @property
   def homepage_url(self):
     return self._homepage_url
 
@@ -403,6 +409,7 @@ class Table(Endpoint):
       name=table_js['name'],
       display_name=table_js['display_name'],
       description=table_js['description'],
+      short_description=table_js['short_description'],
       homepage_url=table_js['homepage_url'],
       download_url=table_js['download_url'],
       columns=table_js['columns'],
@@ -412,13 +419,14 @@ class Table(Endpoint):
       table.add_layout(layout=layout)
     return table
 
-  def __init__(self, name, columns=(), display_name=None, description=None, homepage_url=None,
-               download_url=None):
+  def __init__(self, name, columns=(), display_name=None, description=None, short_description=None,
+               homepage_url=None, download_url=None):
     super().__init__()
     self._name = name
     self._columns = tuple(columns)
     self._display_name = display_name
     self._description = description
+    self._short_description = short_description
     self._homepage_url = homepage_url
     self._download_url = download_url
     # Placeholders.
@@ -507,6 +515,10 @@ class Table(Endpoint):
   @property
   def description(self):
     return self._description
+
+  @property
+  def short_description(self):
+    return self._short_description
 
   @property
   def homepage_url(self):
