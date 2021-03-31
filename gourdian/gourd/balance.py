@@ -273,7 +273,7 @@ def _write_groups(out_dir, relative_to, path, file_splits, num_groups, symlink_o
 
 
 def balance(csv_paths, out_dir, num_groups=None, max_workers=None, relative_to=None,
-            symlink_ok=True, csv_path_weights=None):
+            symlink_ok=True, csv_path_weights=None, tqdm_desc='splitting'):
   """Computes an allocation and materializes it by splitting large files and symlinking others.
 
   This function creates roughly equal-sized directories of csvs inside `out_dir`, in preparation for
@@ -307,7 +307,7 @@ def balance(csv_paths, out_dir, num_groups=None, max_workers=None, relative_to=N
             'symlink_ok': symlink_ok}
   jobs = ((_write_groups, dict(path=str(path), file_splits=fs, **job_kw))
           for path, fs in file_splits.items())
-  with tqdm.tqdm(desc='splitting', total=sum(csv_path_weights.values()),
+  with tqdm.tqdm(desc=tqdm_desc, total=sum(csv_path_weights.values()),
                  mininterval=1, maxinterval=1) as tq:
     with futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
       pending = set(pool.submit(fn, **kw) for fn, kw in itertools.islice(jobs, max_workers * 2))
