@@ -20,8 +20,6 @@ DATASET = 'dataset'
 TABLE = 'table'
 LAYOUT = 'layout'
 
-DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
-
 
 def parse_endpointer(endpointer):
   """Returns Endpointer by parsing the provided endpointer (str, Endpointer supported).
@@ -166,7 +164,7 @@ class Manifest:
   def from_js(cls, manifest_js, client=None):
     client = api.DEFAULT_CLIENT if client is None else client   # NOTE: avoids circular import
     # 1. Manifest.
-    generated_at = datetime.datetime.strptime(manifest_js['generated_at'], DATETIME_FORMAT)
+    generated_at = datetime.datetime.fromisoformat(manifest_js['generated_at'])
     manifest = cls(generated_at=generated_at, client=client)
     # 2. User.
     user_js = manifest_js['user']
@@ -185,7 +183,7 @@ class Manifest:
 
   def __repr__(self):
     return '<%s %r at=%r>' % (self.__class__.__name__, str(self.endpointer),
-                              self.generated_at.strftime(DATETIME_FORMAT))
+                              self.generated_at.isoformat())
 
   def set_dataset(self, dataset):
     if self._dataset is not None:
