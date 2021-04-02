@@ -297,7 +297,7 @@ class Dataset(Endpoint):
   def describe(self, f=sys.stdout):
     has_license = self.license_url or self.license_text
     if self.manifest.generated_at:
-      generated_at_str = self.manifest.generated_at.strftime(DATETIME_FORMAT)
+      generated_at_str = self.manifest.generated_at.isoformat()
     else:
       generated_at_str = None
     # Format available sources.
