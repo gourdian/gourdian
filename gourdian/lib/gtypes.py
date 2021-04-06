@@ -45,6 +45,11 @@ def gtype(qualname):
   return GTypeMeta.gtype(qualname=qualname)
 
 
+def all_gtypes():
+  """Returns all defined GType classes."""
+  return GTypeMeta.all_gtypes()
+
+
 def is_gtype(value):
   return isinstance(value, type) and issubclass(value, GType)
 
@@ -56,8 +61,8 @@ class GTypeMeta(type):
 
   def __new__(cls, name, bases, classdict):
     klass = type.__new__(cls, name, bases, dict(classdict))
-    if name in ('SuperGType', 'GType'):
-      # Do not register the base types SuperGType or GType.
+    if name in ('SuperGType', 'GType', 'GTypeNumeric') or name.startswith('_'):
+      # Do not register the base types.
       pass
     elif issubclass(klass, SuperGType):
       klass.name = klass.__qualname__.rsplit('.', 1)[-1]
@@ -97,6 +102,10 @@ class GTypeMeta(type):
   @classmethod
   def gtype(cls, qualname):
     return cls._GTYPES[qualname]
+
+  @classmethod
+  def all_gtypes(cls):
+    return tuple(cls._GTYPES.values())
 
   @classmethod
   def gtypes_of(cls, super_gtype):
