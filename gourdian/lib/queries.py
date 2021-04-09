@@ -74,6 +74,7 @@ class QueryAnd:
       # Disable everything in ok_chunk_mask that does not match filt.
       filt_bad_mask = np.ones(shape=seq.shape, dtype=bool)
       for head, bomb in filt.head_bombs:
+        assert head < bomb, 'head >= bomb: (%r, %r)' % (head, bomb)
         head_index = seq.left_index_of(value=head, errors=COERCE)
         bomb_index = seq.right_index_of(value=bomb, errors=COERCE)
         filt_bad_mask[slice(head_index, bomb_index)] = False

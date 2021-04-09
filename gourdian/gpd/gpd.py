@@ -446,7 +446,7 @@ def _layouts(endpointer, client=None):
 # LAYOUT LABELING
 def _df_to_lower_upper(df, hows):
   def series_to_lower_upper(values, bounds):
-    """Applies bounds to values and returns a 2-tuple of pd.Series for (heads, tails)."""
+    """Applies bounds to values and returns a 2-tuple of pd.Series of (heads, tails)."""
     if bounds is None:
       return (values, values)
     head_tail_df = bounds(values)
@@ -476,7 +476,7 @@ def df_to_gtypes(df, hows, endpointer=None, munge_ok=True, warn_ok=True, client=
   layout = _layout(endpointer=endpointer, client=client)
   hows = parse_hows(hows=hows, require=_REQUIRE_GTYPE, bind_layout=layout)
   if warn_ok and any(h.bounds is not None for h in hows):
-    warnings.warn('configured bounds will be ignored on all columns')
+    warnings.warn('configured bounds will be ignored on all columns; try df_to_gtype_bounds()')
   ret = pd.concat(
     objs=[h.coax(df[h.via_column]) for h in hows],
     axis=1,
@@ -595,18 +595,19 @@ def df_to_query(df, hows, endpointer=None, client=None, errors_missing=lib_error
   gtypes_lower_df, gtypes_upper_df = df_to_gtype_bounds(df=df, hows=fit_hows)
   # 3. Extract buckets from df using fit_hows, accounting for munged column names in gtypes_df.
   munged_hows = [h.clone(via_column=h.name, name=h.name) for h in fit_hows]
-  buckets_lower_df = gtypes_to_buckets(gtypes_df=gtypes_lower_df, hows=munged_hows).add_suffix(':<')
-  buckets_upper_df = gtypes_to_buckets(gtypes_df=gtypes_upper_df, hows=munged_hows).add_suffix(':>')
-  buckets_upper_df = buckets_upper_df + [h.target.labeler.step for h in fit_hows]
+  buckets_lower_df = gtypes_to_buckets(gtypes_df=gtypes_lower_df, hows=munged_hows).add_prefix('<')
+  buckets_upper_df = gtypes_to_buckets(gtypes_df=gtypes_upper_df, hows=munged_hows).add_suffix('>')
   assert buckets_lower_df.shape == buckets_upper_df.shape
-  # 4. De-dupe bucket ranges by concatenating lower+upper and dropping dupes, and sort by heads.
+  # 4. Bump the upper bounds out by step to ensure we don't get any 0-width query conditions.
+  buckets_upper_df = buckets_upper_df + [h.target.labeler.step for h in fit_hows]
+  # 5. De-dupe bucket ranges by concatenating lower+upper and dropping dupes, and sort by heads.
   unique_range_df = pd.concat((buckets_lower_df, buckets_upper_df), axis=1).drop_duplicates()
   unique_range_df = unique_range_df.sort_values(by=list(buckets_lower_df.columns))
   unique_lower_df = unique_range_df.iloc[:, :len(buckets_lower_df.columns)]
   unique_upper_df = unique_range_df.iloc[:, len(buckets_lower_df.columns):]
-  # 5. Merge sorted ranges into contiguous ranges spaced at least min_step apart.
+  # 6. Merge sorted ranges into contiguous ranges spaced at least min_step apart.
   lower_df, upper_df = _collapse_dfs(lower_df=unique_lower_df, upper_df=unique_upper_df)
-  # 6. Convert ranges to QueryAnd subqueries.
+  # 7. Convert ranges to QueryAnd subqueries.
   subqueries = []
   for (_, *heads), (_, *bombs) in zip(lower_df.itertuples(), upper_df.itertuples()):
     sequence_filters = []
@@ -617,5 +618,5 @@ def df_to_query(df, hows, endpointer=None, client=None, errors_missing=lib_error
       )
       sequence_filters.append(filt)
     subqueries.append(queries.QueryAnd(sequence_filters=sequence_filters))
-  # 7. Return a Query made up of all subqueries.
+  # 8. Return a Query made up of all subqueries.
   return queries.Query(subqueries=subqueries)

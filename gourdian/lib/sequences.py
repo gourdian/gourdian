@@ -24,12 +24,13 @@ class Sequence:
     return itertools.chain(more_itertools.numeric_range(self.head, self.bomb, self.step))
 
   def __getitem__(self, index):
-    # NOTE: Permits fetching the bomb index of this sequence, which isn't technically in the seq.
-    if (index < 0) or (index > len(self)):
-      raise IndexError('must be in (0, %r): %r' % (len(self), index))
+    if index < 0:
+      index = len(self) + index
+    if index > len(self):
+      raise IndexError('index out of bounds (0, %r): %r' % (len(self), index))
     return self.head + (index * self.step)
 
-  def __in__(self, value):
+  def __contains__(self, value):
     return self.head <= value < self.bomb
 
   @property
@@ -42,22 +43,34 @@ class Sequence:
 
   def left_index_of(self, value, errors=lib_errors.RAISE):
     lib_errors.validate_errors(errors, coerce_ok=True, ignore_ok=True, raise_ok=True)
-    if value < self.head:
+    if value not in self:
       if errors == lib_errors.RAISE:
-        raise ValueError('value too small (min=%r): %r' % (self.head, value,))
+        raise ValueError('value out of sequence: %r' % (value,))
       if errors == lib_errors.COERCE:
-        value = self.head
+        value = self.head if value < self.head else (self.bomb - self.step)
     return math.floor((value - self.head) / self.step)
 
   def right_index_of(self, value, errors=lib_errors.RAISE):
     lib_errors.validate_errors(errors, coerce_ok=True, ignore_ok=True, raise_ok=True)
-    # NOTE: Permits fetching the bomb value of this sequence, which isn't technically in the seq.
-    if value > self.bomb:
+    if value not in self:
       if errors == lib_errors.RAISE:
-        raise ValueError('value too large (max=%r): %r' % (self.bomb, value,))
+        raise ValueError('value out of sequence: %r' % (value,))
       if errors == lib_errors.COERCE:
-        value = self.bomb
+        value = self.head if value < self.head else self.bomb
     return math.ceil((value - self.head) / self.step)
+
+  def left_value_of(self, value, errors=lib_errors.RAISE):
+    left_index = self.left_index_of(value=value, errors=errors)
+    return self.head + (left_index * self.step)
+
+  def right_value_of(self, value, errors=lib_errors.RAISE):
+    right_index = self.right_index_of(value=value, errors=errors)
+    return self.head + (right_index * self.step)
+
+  def next_value_of(self, value, errors=lib_errors.RAISE):
+    """Like right_value_of, but will return value+step if value is in iter(self)."""
+    left_value = self.left_value_of(value=value, errors=errors)
+    return left_value + self.step
 
   def to_js(self):
     return {
@@ -77,7 +90,7 @@ class MultiSequence:
   def __len__(self):
     return functools.reduce(lambda acc, seq: acc * len(seq), self.sequences, 1)
 
-  def __in__(self, values):
+  def __contains__(self, values):
     return all((val in seq) for val, seq in zip(self.sequences, values))
 
   def __iter__(self):
@@ -122,6 +135,18 @@ class MultiSequence:
 
   def left_indices_of(self, values, errors=lib_errors.RAISE):
     return tuple(s.left_index_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
+
+  def right_indices_of(self, values, errors=lib_errors.RAISE):
+    return tuple(s.right_index_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
+
+  def left_values_of(self, values, errors=lib_errors.RAISE):
+    return tuple(s.left_value_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
+
+  def right_values_of(self, values, errors=lib_errors.RAISE):
+    return tuple(s.right_value_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
+
+  def next_values_of(self, values, errors=lib_errors.RAISE):
+    return tuple(s.next_value_of(value=v, errors=errors) for s, v in zip(self.sequences, values))
 
   def to_js(self):
     return [s.to_js() for s in self.sequences]
