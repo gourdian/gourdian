@@ -1,5 +1,6 @@
 import collections.abc
 import datetime
+import decimal
 import math
 import numpy as np
 import pandas as pd
@@ -9,6 +10,9 @@ from gourdian.utils import pdutils
 
 
 COERCE = 'coerce'
+
+
+ROUND_UP_CONTEXT = decimal.Context(rounding=decimal.ROUND_HALF_UP)
 
 
 def is_scalar(val):
@@ -202,7 +206,7 @@ class GTypeNumeric(GType):
   BOMB = None
   TAIL = None
   # Format string to use when converting a numeric bucket into a string label.
-  LABEL_FMT = '%0.06f'
+  LABEL_FMT = '{:0.04f}'
   # Step size to use when building a Query object with no pre-defined step info.
   SANE_STEP = 1
 
@@ -262,19 +266,33 @@ class GTypeNumeric(GType):
     return head + (index * step)
 
   @classmethod
-  def _label_scalar(cls, bucket):
+  def _label_scalar_nocontext(cls, bucket):
     if pdutils.is_empty(bucket):
       return None
-    return cls.LABEL_FMT % (bucket,)
+    return cls.LABEL_FMT.format(decimal.Decimal(bucket))
+
+  @classmethod
+  def _label_scalar(cls, bucket):
+    context = decimal.getcontext()
+    try:
+      decimal.setcontext(ROUND_UP_CONTEXT)
+      return cls._label_scalar_nocontext(bucket=bucket)
+    finally:
+      decimal.setcontext(context)
 
   @classmethod
   def _label_pd(cls, bucket):
-    buckets = cls._to_series(bucket)
-    labels = buckets.apply(cls._label_scalar)
-    if len(labels) == 0:
-      # Empty Series retains its original dtype after apply.
-      labels = labels.astype(str)
-    return labels
+    context = decimal.getcontext()
+    try:
+      decimal.setcontext(ROUND_UP_CONTEXT)
+      buckets = cls._to_series(bucket)
+      labels = buckets.apply(cls._label_scalar)
+      if len(labels) == 0:
+        # Empty Series retains its original dtype after apply.
+        labels = labels.astype(str)
+      return labels
+    finally:
+      decimal.setcontext(context)
 
   @classmethod
   def is_valid(cls, val):
@@ -314,7 +332,7 @@ class GTypeNumeric(GType):
 
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
-    LABEL_FMT = '%+011.06f'
+    LABEL_FMT = '{:+09.4f}'
 
     @classmethod
     def _coax_scalar(cls, obj):
@@ -354,7 +372,7 @@ class Point(SuperGType):
 
 class Datetime(SuperGType):
   class Year(GTypeNumeric):
-    LABEL_FMT = '%04d'
+    LABEL_FMT = '{:04.0f}'
 
     @classmethod
     def _coax_scalar(cls, obj, fmt='%Y'):
@@ -378,7 +396,7 @@ class Datetime(SuperGType):
   class Month(GTypeNumeric):
     HEAD = 1
     BOMB = 13
-    LABEL_FMT = '%02d'
+    LABEL_FMT = '{:02.0f}'
 
     @classmethod
     def _coax_scalar(cls, obj, fmt='%m'):
