@@ -314,7 +314,7 @@ class GTypeNumeric(GType):
 
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
-    LABEL_FMT = '%+011.04f'
+    LABEL_FMT = '%+09.04f'
 
     @classmethod
     def _coax_scalar(cls, obj):
