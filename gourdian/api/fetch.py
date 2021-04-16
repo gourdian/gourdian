@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 
 
-DEFAULT_URL_ROOT = 'https://data2.gourdian.net/files/datasets'
+DEFAULT_URL_ROOT = 'https://data.gourdian.net/files/datasets'
 
 
 def fetch(url):

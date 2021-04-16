@@ -202,7 +202,7 @@ class GTypeNumeric(GType):
   BOMB = None
   TAIL = None
   # Format string to use when converting a numeric bucket into a string label.
-  LABEL_FMT = '%0.06f'
+  LABEL_FMT = '%0.04f'
   # Step size to use when building a Query object with no pre-defined step info.
   SANE_STEP = 1
 
@@ -314,7 +314,7 @@ class GTypeNumeric(GType):
 
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
-    LABEL_FMT = '%+011.06f'
+    LABEL_FMT = '%+011.04f'
 
     @classmethod
     def _coax_scalar(cls, obj):
