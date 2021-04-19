@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
+import ast
 import collections
 import colored
 import csv
@@ -52,10 +53,65 @@ def main_headers(csv_paths, filename_ok=True, count_ok=False):
 
 
 def main_header(csv_paths):
-  csv_paths = extract_csv_paths(csv_paths)
-  header = csvutils.extract_header(csv_paths)
+  if csv_paths and len(csv_paths) == 1 and hasattr(csv_paths[0], 'read'):
+    header = csvutils.read_header(csv_in=csv_paths[0])
+  else:
+    csv_paths = extract_csv_paths(csv_paths)
+    header = csvutils.extract_header(csv_paths)
   writer = csv.writer(sys.stdout)
   writer.writerow(header)
+
+
+def main_rename(csv_in, csv_out, header, lacks_header):
+  def update_header(old_header, replace):
+    for index, new_name in replace.items():
+      if not isinstance(index, int):
+        index = old_header.index(index)
+      old_header[index] = new_name
+
+  reader = csv.reader(csv_in)
+  writer = csv.writer(csv_out)
+  try:
+    first_row = next(reader)
+  except StopIteration:
+    # File is empty.
+    raise
+  # Read the first row of file and create a header template (old_header) from it.
+  if lacks_header:
+    old_header = ['' for _ in range(len(first_row))]
+  else:
+    old_header = first_row
+  # Update old_header with info from header.
+  try:
+    replace = ast.literal_eval(header)
+    if isinstance(replace, list):
+      writer.writerow(replace)
+    else:
+      update_header(old_header=old_header, replace=replace)
+      writer.writerow(old_header)
+  except RuntimeError:
+    # Provided header was a non-json string; use it unchanged.
+    csv_out.write(header)
+    csv_out.write('\n')
+  # Write the remainder of file into out.
+  if lacks_header:
+    # The first row was used to create an empty header, but it is also a data row!
+    writer.writerow(first_row)
+  for row in reader:
+    writer.writerow(row)
+
+
+def main_cut(csv_in, csv_out, cut_cols):
+  reader = csv.reader(csv_in)
+  writer = csv.writer(csv_out)
+  header = next(reader)
+  cut_cols = ast.literal_eval(cut_cols)
+  cut_indexes = set(x if isinstance(x, int) else header.index(x) for x in cut_cols)
+  # Write header.
+  writer.writerow([x for i, x in enumerate(header) if i not in cut_indexes])
+  # Write all rows.
+  for row in reader:
+    writer.writerow([x for i, x in enumerate(row) if i not in cut_indexes])
 
 
 def main_head(csv_in, out, n):
@@ -149,10 +205,10 @@ def main_balance(csv_paths, out_dir, symlink_ok, num_groups=None):
                   relative_to=relative_to, symlink_ok=symlink_ok)
 
 
-def main(argv):
+def main():
   logging.basicConfig(format='%(message)s', level=logging.INFO)
   parser = argparse.ArgumentParser()
-  subparsers = parser.add_subparsers()
+  subparsers = parser.add_subparsers(dest='action', required=True)
   # show
   parser_show = subparsers.add_parser('show')
   parser_show.add_argument('csv_in', type=argparse.FileType('r'), default='-', nargs='?')
@@ -169,8 +225,22 @@ def main(argv):
   parser_headers.set_defaults(func=main_headers)
   # header
   parser_header = subparsers.add_parser('header')
-  parser_header.add_argument('csv_paths', type=str, nargs='+')
+  parser_header.add_argument('csv_paths', nargs='*', type=argparse.FileType('r'),
+                             default=[sys.stdin])
   parser_header.set_defaults(func=main_header)
+  # rename
+  parser_rename = subparsers.add_parser('rename')
+  parser_rename.add_argument('header')
+  parser_rename.add_argument('csv_in', type=argparse.FileType('r'), default=sys.stdin, nargs='?')
+  parser_rename.add_argument('csv_out', type=argparse.FileType('w'), default=sys.stdout, nargs='?')
+  parser_rename.add_argument('--lacks-header', default=False, action='store_true')
+  parser_rename.set_defaults(func=main_rename)
+  # cut
+  parser_cut = subparsers.add_parser('cut')
+  parser_cut.add_argument('cut_cols')
+  parser_cut.add_argument('csv_in', type=argparse.FileType('r'), default=sys.stdin, nargs='?')
+  parser_cut.add_argument('csv_out', type=argparse.FileType('w'), default=sys.stdout, nargs='?')
+  parser_cut.set_defaults(func=main_cut)
   # head
   parser_head = subparsers.add_parser('head')
   parser_head.add_argument('csv_in', type=argparse.FileType('r'), default='-', nargs='?')
@@ -217,9 +287,9 @@ def main(argv):
   parser_balance.set_defaults(func=main_balance, symlink_ok=True)
   # Run the requested action.
   args = parser.parse_args()
-  kwargs = dict((k, v) for k, v in args._get_kwargs() if k != 'func')
+  kwargs = dict((k, v) for k, v in args._get_kwargs() if k not in ('func', 'action'))
   return args.func(**kwargs)
 
 
 if __name__ == '__main__':
-  main(sys.argv)
+  main()

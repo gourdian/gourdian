@@ -8,10 +8,9 @@ RAISE = 'raise'
 LOG = 'log'
 
 
-def read_header(csv_path, errors=RAISE):
-  with open(csv_path, 'r') as f:
-    reader = csv.reader(f)
-    return next(reader)
+def read_header(csv_in, errors=RAISE):
+  reader = csv.reader(csv_in)
+  return next(reader)
 
 
 def extract_header(csv_paths, errors=RAISE):
