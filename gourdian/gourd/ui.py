@@ -99,7 +99,8 @@ class DataFrameWalker(urwid.ListWalker):
                              'row-item-nil-hilighted' if is_hilighted else 'row-item-nil',
                              'row-item-nil-selected')
     else:
-      widget = urwid.AttrMap(SelectableText(str(val), wrap='clip', align=align),
+      widget = urwid.AttrMap(SelectableText(str(val).replace('\n', '\\n').replace('\r', '\\r'),
+                                            wrap='clip', align=align),
                              None, 'row-item-selected')
     return (width, widget)
 
