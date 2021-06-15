@@ -255,6 +255,7 @@ def main(csv_in=None, has_header=True):
   main_loop = urwid.MainLoop(
     widget=base,
     palette=PALETTE,
+    handle_mouse=False,
     unhandled_input=unhandled_input,
     event_loop=urwid.AsyncioEventLoop(loop=asyncio.get_event_loop()),
   )
