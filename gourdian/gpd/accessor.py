@@ -18,11 +18,17 @@ class GourdianAccessor:
   # LAYOUT LABELING
   def buckets(self, how, endpointer=None, munge_ok=True):
     """Coax df to the proper gtypes, then bucket and return"""
-    return gpd.df_to_buckets(df=self._df, hows=how, endpointer=endpointer, munge_ok=munge_ok)
+    gtypes_df = gpd.df_to_gtypes(df=self._df, hows=how, endpointer=endpointer, munge_ok=False)
+    return gpd.gtypes_to_buckets(gtypes_df=gtypes_df, hows=how, endpointer=endpointer,
+                                 munge_ok=munge_ok)
 
   def labels(self, how, endpointer=None, munge_ok=True):
     """Coax df to the proper gtypes, then bucket, then label and return"""
-    return gpd.df_to_labels(df=self._df, hows=how, endpointer=endpointer, munge_ok=munge_ok)
+    gtypes_df = gpd.df_to_gtypes(df=self._df, hows=how, endpointer=endpointer, munge_ok=False)
+    buckets_df = gpd.gtypes_to_buckets(gtypes_df=gtypes_df, hows=how, endpointer=endpointer,
+                                       munge_ok=False)
+    return gpd.buckets_to_labels(buckets_df=buckets_df, hows=how, endpointer=endpointer,
+                                 munge_ok=munge_ok)
 
   def filenames(self, how, endpointer=None, gz_ok=True):
     """Coax df to the proper gtypes, then bucket, then label, then filename and return"""

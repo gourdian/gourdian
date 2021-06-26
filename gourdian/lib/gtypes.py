@@ -1,10 +1,13 @@
 import collections.abc
 import datetime
 import decimal
+import functools
 import math
 import numpy as np
 import pandas as pd
 import pandas.api.types as pd_types
+import re
+import string
 
 from gourdian.utils import pdutils
 
@@ -200,6 +203,10 @@ class GTypeLabeler:
     return self._gtype.label(bucket=bucket)
 
 
+class GTypeNumericBucket(GType):
+  pass
+
+
 class GTypeNumeric(GType):
   # BOMB/TAIL are mutually exclusive: valid if val < BOMB or val <= TAIL.
   HEAD = None
@@ -247,7 +254,7 @@ class GTypeNumeric(GType):
       if has_tail:
         return vals <= cls.TAIL
       return ~vals.isnull()
-    return pd.Series(np.zeros(len(vals))).astype(np.bool)
+    return pd.Series(np.zeros(len(vals), dtype=np.bool))
 
   @classmethod
   def _bucket_scalar(cls, val, step, head):
@@ -330,6 +337,140 @@ class GTypeNumeric(GType):
     return GTypeLabeler(gtype=cls, step=step, head=head, **kwargs)
 
 
+class GTypeSlug(GType):
+  HEAD = 0.0
+  BOMB = 1.0
+  TAIL = None
+
+  # There are 37 valid slug characters: [0-9] + [a-z] + [_] = 10 + 26 + 1
+  CLEANUP_RE = re.compile(r'[ ]+')
+  SLUG_RE = re.compile(r'[^a-z0-9_]')
+  SLUG_BASE = 37
+  SLUG_ORDS = dict([(x, i) for i, x in enumerate(string.digits)]
+                   + [(x, i+10) for i, x in enumerate(string.ascii_lowercase)]
+                   + [('_', 36)])
+
+  LABEL_FMT = '{:0.08f}'
+
+  @classmethod
+  def _is_valid_scalar(cls, val):
+    # For now, any non-slug characters in val will simply be dropped via coax().
+    return True
+
+  @classmethod
+  def _is_valid_pd(cls, val):
+    val = cls._to_series(val)
+    return pd.Series(np.ones(len(val), dtype=np.bool))
+
+  @classmethod
+  def _coax_scalar(cls, obj):
+    if pdutils.is_empty(obj):
+      return None
+    obj = str(obj)
+    obj = obj.strip()
+    obj = obj.lower()
+    obj = cls.CLEANUP_RE.sub('_', obj)
+    obj = cls.SLUG_RE.sub('', obj)
+    return obj
+
+  @classmethod
+  def _coax_pd(cls, obj):
+    objs = cls._to_series(obj)
+    objs[~cls._is_valid_pd(obj)] = np.nan
+    objs = objs.str.strip()
+    objs = objs.str.lower()
+    objs = objs.str.replace(cls.CLEANUP_RE, '_')
+    objs = objs.str.replace(cls.SLUG_RE, '')
+    return objs
+
+  @classmethod
+  def _snug_slug_to_float(cls, slug, depth=None):
+    if pdutils.is_empty(slug):
+      return None
+    # Assumes slug has already been padded/truncated to the correct depth (is "snug").
+    # NOTE: depth can be provided to avoid checking len(slug), and/or to reduce the depth of slug.
+    slug = str(slug)
+    depth = depth or len(slug)
+    total = 0
+    for i, x in enumerate(slug):
+      total += cls.SLUG_ORDS[x] * (cls.SLUG_BASE**(depth-i-1))
+    return total / (cls.SLUG_BASE**depth)
+
+  @classmethod
+  def _bucket_scalar(cls, val, step, head=None, depth=4):
+    # A. Convert the slug to a float in [0.0, 1.0).
+    slug = (val + ('0' * depth))[:depth]
+    val = cls._snug_slug_to_float(slug=slug, depth=depth)
+    # B. Bucket that float using step/head.
+    return GTypeNumeric._bucket_scalar(val=val, step=step, head=head)
+
+  @classmethod
+  def _bucket_pd(cls, val, step, head=None, depth=4):
+    vals = cls._to_series(val)
+    vals = vals + ('0' * depth)
+    vals = vals.str.slice(start=0, stop=depth)
+    vals = vals.apply(func=cls._snug_slug_to_float, depth=depth)
+    return GTypeNumeric._bucket_pd(val=vals, step=step, head=head)
+
+  @classmethod
+  def _label_scalar_nocontext(cls, bucket):
+    if pdutils.is_empty(bucket):
+      return None
+    return cls.LABEL_FMT.format(decimal.Decimal(bucket))
+
+  @classmethod
+  def _label_scalar(cls, bucket):
+    context = decimal.getcontext()
+    try:
+      decimal.setcontext(ROUND_UP_CONTEXT)
+      return cls._label_scalar_nocontext(bucket=bucket)
+    finally:
+      decimal.setcontext(context)
+
+  @classmethod
+  def _label_pd(cls, bucket):
+    context = decimal.getcontext()
+    try:
+      decimal.setcontext(ROUND_UP_CONTEXT)
+      buckets = cls._to_series(bucket)
+      labels = buckets.apply(cls._label_scalar)
+      if len(labels) == 0:
+        # Empty Series retains its original dtype after apply.
+        labels = labels.astype(str)
+      return labels
+    finally:
+      decimal.setcontext(context)
+
+  @classmethod
+  def is_valid(cls, val):
+    if is_scalar(val):
+      return cls._is_valid_scalar(val)
+    return cls._is_valid_pd(val)
+
+  @classmethod
+  def coax(cls, obj, **kwargs):
+    if is_scalar(obj):
+      return cls._coax_scalar(obj, **kwargs)
+    return cls._coax_pd(obj, **kwargs)
+
+  @classmethod
+  def bucket(cls, val, step, depth=4, head=None):
+    head = pdutils.coalesce(head, cls.HEAD)
+    if is_scalar(val):
+      return cls._bucket_scalar(val, step=step, depth=depth, head=head)
+    return cls._bucket_pd(val, step=step, depth=depth, head=head)
+
+  @classmethod
+  def label(cls, bucket):
+    if is_scalar(bucket):
+      return cls.LABEL_FMT.format(decimal.Decimal(bucket))
+    return cls._
+
+  @classmethod
+  def labeler(cls, step, head=None, depth=4, **kwargs):
+    return GTypeLabeler(gtype=cls, step=step, head=head, depth=depth, **kwargs)
+
+
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
     LABEL_FMT = '{:+09.4f}'
@@ -368,6 +509,11 @@ class Point(SuperGType):
     BOMB = None
     TAIL = 180.0
     SANE_STEP = GTypeNumeric.depth_step(depth=10, head=HEAD, bomb=TAIL)
+
+
+class Geo(SuperGType):
+  class CountrySlug(GTypeSlug):
+    pass
 
 
 class Datetime(SuperGType):
