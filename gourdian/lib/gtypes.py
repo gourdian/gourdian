@@ -61,6 +61,65 @@ def is_gtype(value):
   return isinstance(value, type) and issubclass(value, GType)
 
 
+class GTypeLabeler:
+  def __init__(self, gtype, step, head, **extra_kwargs):
+    self._gtype = gtype
+    self._step = step
+    self._head = head
+    self._extra_kwargs = extra_kwargs
+    self._kwargs = dict(step=step, head=head, **(extra_kwargs or {}))
+    # Runtime state.
+    self._name = None
+
+  def clone(self, gtype=None, **kwargs):
+    new_gtype = self.gtype if gtype is None else gtype
+    new_kwargs = self.kwargs
+    new_kwargs.update(kwargs)
+    return type(self)(gtype=new_gtype, **new_kwargs)
+
+  def __repr__(self):
+    kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
+    kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
+    return ('<%s %s(%s)>' % (self.__class__.__name__, self._gtype.qualname, kw_str))
+
+  def __str__(self):
+    return self.name
+
+  @property
+  def name(self):
+    if self._name is None:
+      kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
+      kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
+      self._name = '%s(%s)' % (self._gtype.qualname, kw_str)
+    return self._name
+
+  @property
+  def gtype(self):
+    return self._gtype
+
+  @property
+  def head(self):
+    return self._head
+
+  @property
+  def step(self):
+    return self._step
+
+  @property
+  def extra_kwargs(self):
+    return dict(self._extra_kwargs)
+
+  @property
+  def kwargs(self):
+    return dict(self._kwargs)
+
+  def bucket(self, val):
+    return self._gtype.bucket(val=val, **self._kwargs)
+
+  def label(self, bucket):
+    return self._gtype.label(bucket=bucket)
+
+
 class GTypeMeta(type):
   """Metaclass for GType/SuperGType that maintains a directory of all gtypes."""
   _SUPER_GTYPES = {}
@@ -143,71 +202,38 @@ class GType(metaclass=GTypeMeta):
       series = pd.Series(val)
     return series.rename(series.name or cls.qualname)
 
+  @classmethod
+  def is_valid(cls, val):
+    if is_scalar(val):
+      return cls._is_valid_scalar(val)
+    return cls._is_valid_pd(val)
 
-class GTypeLabeler:
-  def __init__(self, gtype, step, head, **extra_kwargs):
-    self._gtype = gtype
-    self._step = step
-    self._head = head
-    self._extra_kwargs = extra_kwargs
-    self._kwargs = dict(step=step, head=head, **(extra_kwargs or {}))
-    # Runtime state.
-    self._name = None
+  @classmethod
+  def coax(cls, obj, **kwargs):
+    if is_scalar(obj):
+      return cls._coax_scalar(obj, **kwargs)
+    return cls._coax_pd(obj, **kwargs)
 
-  def clone(self, gtype=None, **kwargs):
-    new_gtype = self.gtype if gtype is None else gtype
-    new_kwargs = self.kwargs
-    new_kwargs.update(kwargs)
-    return type(self)(gtype=new_gtype, **new_kwargs)
+  @classmethod
+  def bucket(cls, val, step, head=None):
+    head = pdutils.coalesce(head, cls.HEAD, 0)
+    if is_scalar(val):
+      return cls._bucket_scalar(val, step=step, head=head)
+    return cls._bucket_pd(val, step=step, head=head)
 
-  def __repr__(self):
-    kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
-    kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
-    return ('<%s %s(%s)>' % (self.__class__.__name__, self._gtype.qualname, kw_str))
+  @classmethod
+  def label(cls, bucket):
+    if is_scalar(bucket):
+      return cls._label_scalar(bucket)
+    return cls._label_pd(bucket)
 
-  def __str__(self):
-    return self.name
-
-  @property
-  def name(self):
-    if self._name is None:
-      kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
-      kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
-      self._name = '%s(%s)' % (self._gtype.qualname, kw_str)
-    return self._name
-
-  @property
-  def gtype(self):
-    return self._gtype
-
-  @property
-  def head(self):
-    return self._head
-
-  @property
-  def step(self):
-    return self._step
-
-  @property
-  def extra_kwargs(self):
-    return dict(self._extra_kwargs)
-
-  @property
-  def kwargs(self):
-    return dict(self._kwargs)
-
-  def bucket(self, val):
-    return self._gtype.bucket(val=val, **self._kwargs)
-
-  def label(self, bucket):
-    return self._gtype.label(bucket=bucket)
+  @classmethod
+  def labeler(cls, step, head=None, **kwargs):
+    return GTypeLabeler(gtype=cls, step=step, head=head, **kwargs)
 
 
 class GTypeNumericBucket(GType):
-  pass
-
-
-class GTypeNumeric(GType):
+  """A GType for types that have numeric bucket values."""
   # BOMB/TAIL are mutually exclusive: valid if val < BOMB or val <= TAIL.
   HEAD = None
   BOMB = None
@@ -216,45 +242,6 @@ class GTypeNumeric(GType):
   LABEL_FMT = '{:0.04f}'
   # Step size to use when building a Query object with no pre-defined step info.
   SANE_STEP = 1
-
-  @classmethod
-  def _is_valid_scalar(cls, val):
-    if isinstance(val, (int, float)):
-      has_head = cls.HEAD is not None
-      has_bomb = cls.BOMB is not None
-      has_tail = cls.TAIL is not None
-      if has_head and has_bomb:
-        return cls.HEAD <= val < cls.BOMB
-      if has_head and has_tail:
-        return cls.HEAD <= val <= cls.TAIL
-      if has_head:
-        return cls.HEAD <= val
-      if has_bomb:
-        return val < cls.BOMB
-      if has_tail:
-        return val <= cls.TAIL
-      return True
-    return False
-
-  @classmethod
-  def _is_valid_pd(cls, val):
-    vals = cls._to_series(val)
-    if pd_types.is_numeric_dtype(vals):
-      has_head = cls.HEAD is not None
-      has_bomb = cls.BOMB is not None
-      has_tail = cls.TAIL is not None
-      if has_head and has_bomb:
-        return (cls.HEAD <= vals) & (vals < cls.BOMB)
-      if has_head and has_tail:
-        return (cls.HEAD <= vals) & (vals <= cls.TAIL)
-      if has_head:
-        return cls.HEAD <= vals
-      if has_bomb:
-        return vals < cls.BOMB
-      if has_tail:
-        return vals <= cls.TAIL
-      return ~vals.isnull()
-    return pd.Series(np.zeros(len(vals), dtype=np.bool))
 
   @classmethod
   def _bucket_scalar(cls, val, step, head):
@@ -302,42 +289,69 @@ class GTypeNumeric(GType):
       decimal.setcontext(context)
 
   @classmethod
-  def is_valid(cls, val):
-    if is_scalar(val):
-      return cls._is_valid_scalar(val)
-    return cls._is_valid_pd(val)
-
-  @classmethod
-  def coax(cls, obj, **kwargs):
-    if is_scalar(obj):
-      return cls._coax_scalar(obj, **kwargs)
-    return cls._coax_pd(obj, **kwargs)
-
-  @classmethod
-  def bucket(cls, val, step, head=None):
-    head = pdutils.coalesce(head, cls.HEAD, 0)
-    if is_scalar(val):
-      return cls._bucket_scalar(val, step=step, head=head)
-    return cls._bucket_pd(val, step=step, head=head)
-
-  @classmethod
-  def label(cls, bucket):
-    if is_scalar(bucket):
-      return cls._label_scalar(bucket)
-    return cls._label_pd(bucket)
-
-  @classmethod
   def depth_step(cls, depth, head=None, bomb=None):
     head = pdutils.coalesce(head, cls.HEAD)
     bomb = pdutils.coalesce(bomb, cls.BOMB, cls.TAIL)
     return (bomb - head) / 2**depth
 
+
+class GTypeNumeric(GTypeNumericBucket):
   @classmethod
-  def labeler(cls, step, head=None, **kwargs):
-    return GTypeLabeler(gtype=cls, step=step, head=head, **kwargs)
+  def _is_valid_scalar(cls, val):
+    if isinstance(val, (int, float)):
+      has_head = cls.HEAD is not None
+      has_bomb = cls.BOMB is not None
+      has_tail = cls.TAIL is not None
+      if has_head and has_bomb:
+        return cls.HEAD <= val < cls.BOMB
+      if has_head and has_tail:
+        return cls.HEAD <= val <= cls.TAIL
+      if has_head:
+        return cls.HEAD <= val
+      if has_bomb:
+        return val < cls.BOMB
+      if has_tail:
+        return val <= cls.TAIL
+      return True
+    return False
+
+  @classmethod
+  def _is_valid_pd(cls, val):
+    vals = cls._to_series(val)
+    if pd_types.is_numeric_dtype(vals):
+      has_head = cls.HEAD is not None
+      has_bomb = cls.BOMB is not None
+      has_tail = cls.TAIL is not None
+      if has_head and has_bomb:
+        return (cls.HEAD <= vals) & (vals < cls.BOMB)
+      if has_head and has_tail:
+        return (cls.HEAD <= vals) & (vals <= cls.TAIL)
+      if has_head:
+        return cls.HEAD <= vals
+      if has_bomb:
+        return vals < cls.BOMB
+      if has_tail:
+        return vals <= cls.TAIL
+      return ~vals.isnull()
+    return pd.Series(np.zeros(len(vals), dtype=np.bool))
+
+  @classmethod
+  def _coax_scalar(cls, obj):
+    if pdutils.is_empty(obj):
+      return None
+    if not isinstance(obj, float):
+      obj = float(obj)
+    return obj if cls.is_valid(obj) else None
+
+  @classmethod
+  def _coax_pd(cls, obj):
+    objs = cls._to_series(obj)
+    objs = to_numeric(vals=objs)
+    objs[~cls._is_valid_pd(objs)] = np.nan
+    return objs
 
 
-class GTypeSlug(GType):
+class GTypeSlug(GTypeNumericBucket):
   HEAD = 0.0
   BOMB = 1.0
   TAIL = None
@@ -384,111 +398,40 @@ class GTypeSlug(GType):
     return objs
 
   @classmethod
-  def _snug_slug_to_float(cls, slug, depth=None):
+  def _snug_slug_to_float(cls, slug, width=None):
     if pdutils.is_empty(slug):
       return None
-    # Assumes slug has already been padded/truncated to the correct depth (is "snug").
-    # NOTE: depth can be provided to avoid checking len(slug), and/or to reduce the depth of slug.
+    # Assumes slug has already been padded/truncated to the correct width (is "snug").
+    # NOTE: width can be provided to avoid checking len(slug), and/or to reduce the width of slug.
     slug = str(slug)
-    depth = depth or len(slug)
+    width = width or len(slug)
     total = 0
     for i, x in enumerate(slug):
-      total += cls.SLUG_ORDS[x] * (cls.SLUG_BASE**(depth-i-1))
-    return total / (cls.SLUG_BASE**depth)
+      total += cls.SLUG_ORDS[x] * (cls.SLUG_BASE**(width-i-1))
+    return total / (cls.SLUG_BASE**width)
 
   @classmethod
-  def _bucket_scalar(cls, val, step, head=None, depth=4):
+  def _bucket_scalar(cls, val, step, head=None, width=4):
     # A. Convert the slug to a float in [0.0, 1.0).
-    slug = (val + ('0' * depth))[:depth]
-    val = cls._snug_slug_to_float(slug=slug, depth=depth)
+    slug = (val + ('0' * width))[:width]
+    val = cls._snug_slug_to_float(slug=slug, width=width)
     # B. Bucket that float using step/head.
-    return GTypeNumeric._bucket_scalar(val=val, step=step, head=head)
+    return GTypeNumericBucket._bucket_scalar(val=val, step=step, head=head)
 
   @classmethod
-  def _bucket_pd(cls, val, step, head=None, depth=4):
+  def _bucket_pd(cls, val, step, head=None, width=4):
+    # A. Convert the slug to a float in [0.0, 1.0).
     vals = cls._to_series(val)
-    vals = vals + ('0' * depth)
-    vals = vals.str.slice(start=0, stop=depth)
-    vals = vals.apply(func=cls._snug_slug_to_float, depth=depth)
-    return GTypeNumeric._bucket_pd(val=vals, step=step, head=head)
-
-  @classmethod
-  def _label_scalar_nocontext(cls, bucket):
-    if pdutils.is_empty(bucket):
-      return None
-    return cls.LABEL_FMT.format(decimal.Decimal(bucket))
-
-  @classmethod
-  def _label_scalar(cls, bucket):
-    context = decimal.getcontext()
-    try:
-      decimal.setcontext(ROUND_UP_CONTEXT)
-      return cls._label_scalar_nocontext(bucket=bucket)
-    finally:
-      decimal.setcontext(context)
-
-  @classmethod
-  def _label_pd(cls, bucket):
-    context = decimal.getcontext()
-    try:
-      decimal.setcontext(ROUND_UP_CONTEXT)
-      buckets = cls._to_series(bucket)
-      labels = buckets.apply(cls._label_scalar)
-      if len(labels) == 0:
-        # Empty Series retains its original dtype after apply.
-        labels = labels.astype(str)
-      return labels
-    finally:
-      decimal.setcontext(context)
-
-  @classmethod
-  def is_valid(cls, val):
-    if is_scalar(val):
-      return cls._is_valid_scalar(val)
-    return cls._is_valid_pd(val)
-
-  @classmethod
-  def coax(cls, obj, **kwargs):
-    if is_scalar(obj):
-      return cls._coax_scalar(obj, **kwargs)
-    return cls._coax_pd(obj, **kwargs)
-
-  @classmethod
-  def bucket(cls, val, step, depth=4, head=None):
-    head = pdutils.coalesce(head, cls.HEAD)
-    if is_scalar(val):
-      return cls._bucket_scalar(val, step=step, depth=depth, head=head)
-    return cls._bucket_pd(val, step=step, depth=depth, head=head)
-
-  @classmethod
-  def label(cls, bucket):
-    if is_scalar(bucket):
-      return cls.LABEL_FMT.format(decimal.Decimal(bucket))
-    return cls._
-
-  @classmethod
-  def labeler(cls, step, head=None, depth=4, **kwargs):
-    return GTypeLabeler(gtype=cls, step=step, head=head, depth=depth, **kwargs)
+    vals = vals + ('0' * width)
+    vals = vals.str.slice(start=0, stop=width)
+    vals = vals.apply(func=cls._snug_slug_to_float, width=width)
+    # B. Bucket that float using step/head.
+    return GTypeNumericBucket._bucket_pd(val=vals, step=step, head=head)
 
 
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
     LABEL_FMT = '{:+09.4f}'
-
-    @classmethod
-    def _coax_scalar(cls, obj):
-      if pdutils.is_empty(obj):
-        return None
-      if not isinstance(obj, float):
-        obj = float(obj)
-      return obj if cls.is_valid(obj) else None
-
-    @classmethod
-    def _coax_pd(cls, obj):
-      objs = cls._to_series(obj)
-      objs = to_numeric(vals=objs)
-      objs[~cls._is_valid_pd(objs)] = np.nan
-      return objs
 
     @classmethod
     def labeler(cls, step=None, head=None, depth=None):
