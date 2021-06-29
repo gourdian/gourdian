@@ -22,12 +22,23 @@ def coalesce(*vals, unset=None):
   return val
 
 
-def concat_reindex(df, index_df):
+def concat_reindex_old(df, index_df):
   # Glue index_df onto the front of df, joining by index.
   merged_df = pd.concat([index_df, df], axis=1)
   # Re-index merged_df using the index_df columns glued on to the front.
   index_cols = [merged_df.iloc[:, i] for i in range(len(index_df.columns))]
   merged_df.set_index(index_cols, inplace=True)
+  # Drop the index_df columns that have been promoted to the index of merged_df.
+  return merged_df.iloc[:, len(index_cols):]
+
+
+def concat_reindex(df, index_df):
+  # Glue index_df onto the front of df, joining by index (allowing for sorting differences).
+  merged_df = pd.concat([index_df, df], axis=1)
+  # Create a MultiIndex explicitly, because we always want a multiindex (even a 1-col multiindex).
+  index_cols = [merged_df.columns[i] for i in range(len(index_df.columns))]
+  new_index = pd.MultiIndex.from_frame(merged_df[index_cols])
+  merged_df.index = new_index
   # Drop the index_df columns that have been promoted to the index of merged_df.
   return merged_df.iloc[:, len(index_cols):]
 
