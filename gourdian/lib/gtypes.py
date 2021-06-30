@@ -1,7 +1,8 @@
+import collections
 import collections.abc
 import datetime
 import decimal
-import functools
+import hashlib
 import math
 import numpy as np
 import pandas as pd
@@ -351,30 +352,33 @@ class GTypeNumeric(GTypeNumericBucket):
     return objs
 
 
-class GTypeFloatSlug(GTypeNumericBucket):
-  HEAD = 0.0
-  BOMB = 1.0
+class GTypeEnum(GTypeNumericBucket):
+  """Abstract GType representing string values that define an enum of finite values."""
+  VALUES = {}
+
+  HEAD = 0
+  BOMB = 0
   TAIL = None
 
-  # There are 37 valid slug characters: [0-9] + [a-z] + [_] = 10 + 26 + 1
-  CLEANUP_RE = re.compile(r'[ ]+')
-  SLUG_RE = re.compile(r'[^a-z0-9_]')
-  SLUG_BASE = 37
-  SLUG_ORDS = dict([(x, i) for i, x in enumerate(string.digits)]
-                   + [(x, i+10) for i, x in enumerate(string.ascii_lowercase)]
-                   + [('_', 36)])
+  LABEL_FMT = '{:d}'
 
-  LABEL_FMT = '{:0.08f}'
+  @classmethod
+  def create(cls, name, values):
+    values = dict(values) if isinstance(values, dict) else {v: i for i, v in enumerate(values)}
+    return type(name, (cls,), {
+      'VALUES': values,
+      'BOMB': len(values),
+      'LABEL_FMT': '{:0%dd}' % (len(str(len(values))),),
+    })
 
   @classmethod
   def _is_valid_scalar(cls, val):
-    # For now, any non-slug characters in val will simply be dropped via coax().
-    return True
+    return val in cls.VALUES
 
   @classmethod
   def _is_valid_pd(cls, val):
     val = cls._to_series(val)
-    return pd.Series(np.ones(len(val), dtype=np.bool))
+    return val.isin(set(cls.VALUES))
 
   @classmethod
   def _coax_scalar(cls, obj):
@@ -383,60 +387,39 @@ class GTypeFloatSlug(GTypeNumericBucket):
     obj = str(obj)
     obj = obj.strip()
     obj = obj.lower()
-    obj = cls.CLEANUP_RE.sub('_', obj)
-    obj = cls.SLUG_RE.sub('', obj)
     return obj
 
   @classmethod
   def _coax_pd(cls, obj):
-    objs = cls._to_series(obj)
-    objs[~cls._is_valid_pd(obj)] = np.nan
-    objs = objs.str.strip()
-    objs = objs.str.lower()
-    objs = objs.str.replace(cls.CLEANUP_RE, '_')
-    objs = objs.str.replace(cls.SLUG_RE, '')
-    return objs
+    obj = cls._to_series(obj)
+    obj = obj.str.strip()
+    obj = obj.str.lower()
+    return obj
 
   @classmethod
-  def _snug_slug_to_float(cls, slug, width=None):
-    if pdutils.is_empty(slug):
-      return None
-    # Assumes slug has already been padded/truncated to the correct width (is "snug").
-    # NOTE: width can be provided to avoid checking len(slug), and/or to reduce the width of slug.
-    slug = str(slug)
-    width = width or len(slug)
-    total = 0
-    for i, x in enumerate(slug):
-      total += cls.SLUG_ORDS[x] * (cls.SLUG_BASE**(width-i-1))
-    return total / (cls.SLUG_BASE**width)
+  def _val_to_enum(cls, val):
+    return cls.VALUES[val]
 
   @classmethod
-  def _bucket_scalar(cls, val, step, head=None, width=4):
-    # A. Convert the slug to a float in [0.0, 1.0).
-    slug = (val + ('0' * width))[:width]
-    val = cls._snug_slug_to_float(slug=slug, width=width)
-    # B. Bucket that float using step/head.
+  def _bucket_scalar(cls, val, step, head=None):
+    val = cls._val_to_enum(val=val)
     return GTypeNumericBucket._bucket_scalar(val=val, step=step, head=head)
 
   @classmethod
-  def _bucket_pd(cls, val, step, head=None, width=4):
-    # A. Convert the slug to a float in [0.0, 1.0).
-    vals = cls._to_series(val)
-    vals = vals + ('0' * width)
-    vals = vals.str.slice(start=0, stop=width)
-    vals = vals.apply(func=cls._snug_slug_to_float, width=width)
-    # B. Bucket that float using step/head.
-    return GTypeNumericBucket._bucket_pd(val=vals, step=step, head=head)
+  def _bucket_pd(cls, val, step, head=None):
+    val = cls._to_series(val)
+    val = val.apply(func=cls._val_to_enum)
+    return GTypeNumericBucket._bucket_pd(val=val, step=step, head=head)
 
   @classmethod
-  def bucket(cls, val, step, head=None, width=4):
-    head = pdutils.coalesce(head, cls.HEAD, 0)
-    if is_scalar(val):
-      return cls._bucket_scalar(val, step=step, head=head, width=width)
-    return cls._bucket_pd(val, step=step, head=head, width=width)
+  def _label_scalar_nocontext(cls, bucket):
+    if pdutils.is_empty(bucket):
+      return None
+    return cls.LABEL_FMT.format(int(bucket))
 
 
 class GTypeSlug(GTypeNumericBucket):
+  """GType representing string values that can be meaningfully converted to slugs."""
   # There are 37 valid slug characters: [0-9] + [a-z] + [_] = 10 + 26 + 1
   CLEANUP_RE = re.compile(r'[ ]+')
   SLUG_RE = re.compile(r'[^a-z0-9_]')
@@ -476,13 +459,12 @@ class GTypeSlug(GTypeNumericBucket):
 
   @classmethod
   def _coax_pd(cls, obj):
-    objs = cls._to_series(obj)
-    objs[~cls._is_valid_pd(obj)] = np.nan
-    objs = objs.str.strip()
-    objs = objs.str.lower()
-    objs = objs.str.replace(cls.CLEANUP_RE, '_')
-    objs = objs.str.replace(cls.SLUG_RE, '')
-    return objs
+    obj = cls._to_series(obj)
+    obj = obj.str.strip()
+    obj = obj.str.lower()
+    obj = obj.str.replace(cls.CLEANUP_RE, '_')
+    obj = obj.str.replace(cls.SLUG_RE, '')
+    return obj
 
   @classmethod
   def _snug_slug_to_float(cls, slug):
@@ -504,12 +486,12 @@ class GTypeSlug(GTypeNumericBucket):
   @classmethod
   def _bucket_pd(cls, val, step, head=None):
     # A. Convert the slug to a float in [0.0, 1.0).
-    vals = cls._to_series(val)
-    vals = vals + ('0' * cls.SLUG_WIDTH)
-    vals = vals.str.slice(start=0, stop=cls.SLUG_WIDTH)
-    vals = vals.apply(func=cls._snug_slug_to_float)
+    val = cls._to_series(val)
+    val = val + ('0' * cls.SLUG_WIDTH)
+    val = val.str.slice(start=0, stop=cls.SLUG_WIDTH)
+    val = val.apply(func=cls._snug_slug_to_float)
     # B. Bucket that float using step/head.
-    return GTypeNumericBucket._bucket_pd(val=vals, step=step, head=head)
+    return GTypeNumericBucket._bucket_pd(val=val, step=step, head=head)
 
   @classmethod
   def _label_scalar_nocontext(cls, bucket):

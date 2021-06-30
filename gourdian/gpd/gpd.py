@@ -343,11 +343,6 @@ class GTypeLabelerTarget(HowTarget):
     return None
 
   @property
-  def coaxer(self):
-    # Return coaxer with gtype's default arguments.
-    return self._labeler.gtype.coaxer()
-
-  @property
   def labeler(self):
     return self._labeler
 
