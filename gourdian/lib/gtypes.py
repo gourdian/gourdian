@@ -48,9 +48,13 @@ def super_gtype(name):
   return GTypeMeta.super_gtype(name=name)
 
 
-def gtype(qualname):
-  """Returns the GType class with a given qualname; e.g. <SuperGType.name>.<GType.name>."""
-  return GTypeMeta.gtype(qualname=qualname)
+def gtype(qualname, create_kwargs=None):
+  """Returns the GType class with a given qualname; e.g. <SuperGType.name>.<GType.name>.
+
+  If create_kwargs are provided, the requested gtype's create() method is called with those args.
+  """
+  gtype = GTypeMeta.gtype(qualname=qualname)
+  return gtype.create(**create_kwargs) if create_kwargs is not None else gtype
 
 
 def all_gtypes():
@@ -193,6 +197,8 @@ class SuperGType(metaclass=GTypeMeta):
 
 
 class GType(metaclass=GTypeMeta):
+  create_kwargs = None
+
   @classmethod
   def _to_series(cls, val):
     if isinstance(val, pd.Series):
@@ -342,18 +348,23 @@ class GTypeNumeric(GTypeNumericBucket):
       return None
     if not isinstance(obj, float):
       obj = float(obj)
-    return obj if cls.is_valid(obj) else None
+    return obj if cls._is_valid_scalar(obj) else None
 
   @classmethod
   def _coax_pd(cls, obj):
-    objs = cls._to_series(obj)
-    objs = to_numeric(vals=objs)
-    objs[~cls._is_valid_pd(objs)] = np.nan
-    return objs
+    obj = cls._to_series(obj)
+    obj = to_numeric(vals=obj)
+    obj[~cls._is_valid_pd(obj)] = np.nan
+    return obj
 
 
 class GTypeEnum(GTypeNumericBucket):
-  """Abstract GType representing string values that define an enum of finite values."""
+  """Abstract GType representing string values that define an enum of finite values.
+
+  This class cannot be used on its own, as it has an empty set of valid values.  Instead, an enum's
+  valid values should be provided to create() which returns a new subclass configured to use them.
+  """
+  create_kwargs = {'values': []}
   VALUES = {}
 
   HEAD = 0
@@ -363,9 +374,12 @@ class GTypeEnum(GTypeNumericBucket):
   LABEL_FMT = '{:d}'
 
   @classmethod
-  def create(cls, name, values):
+  def create(cls, values):
     values = dict(values) if isinstance(values, dict) else {v: i for i, v in enumerate(values)}
+    name = 'Enum#%s' % (hashlib.md5(repr(values).encode('utf-8')).hexdigest(),)
     return type(name, (cls,), {
+      '__qualname__': 'String.%s' % (name,),
+      'create_kwargs': {'values': values},
       'VALUES': values,
       'BOMB': len(values),
       'LABEL_FMT': '{:0%dd}' % (len(str(len(values))),),
@@ -386,14 +400,13 @@ class GTypeEnum(GTypeNumericBucket):
       return None
     obj = str(obj)
     obj = obj.strip()
-    obj = obj.lower()
-    return obj
+    return obj if cls._is_valid_scalar(obj) else None
 
   @classmethod
   def _coax_pd(cls, obj):
     obj = cls._to_series(obj)
     obj = obj.str.strip()
-    obj = obj.str.lower()
+    obj[~cls._is_valid_pd(obj)] = np.nan
     return obj
 
   @classmethod
@@ -438,13 +451,12 @@ class GTypeSlug(GTypeNumericBucket):
 
   @classmethod
   def _is_valid_scalar(cls, val):
-    # For now, any non-slug characters in val will simply be dropped via coax().
-    return True
+    return cls.SLUG_RE.search(val) is None
 
   @classmethod
   def _is_valid_pd(cls, val):
     val = cls._to_series(val)
-    return pd.Series(np.ones(len(val), dtype=np.bool))
+    return ~val.str.contains(pat=cls.SLUG_RE)
 
   @classmethod
   def _coax_scalar(cls, obj):
@@ -455,7 +467,7 @@ class GTypeSlug(GTypeNumericBucket):
     obj = obj.lower()
     obj = cls.CLEANUP_RE.sub('_', obj)
     obj = cls.SLUG_RE.sub('', obj)
-    return obj
+    return obj if cls._is_valid_scalar(obj) else None
 
   @classmethod
   def _coax_pd(cls, obj):
@@ -464,6 +476,7 @@ class GTypeSlug(GTypeNumericBucket):
     obj = obj.str.lower()
     obj = obj.str.replace(cls.CLEANUP_RE, '_')
     obj = obj.str.replace(cls.SLUG_RE, '')
+    obj[~cls._is_valid_pd(obj)] = np.nan
     return obj
 
   @classmethod
@@ -500,6 +513,14 @@ class GTypeSlug(GTypeNumericBucket):
     return cls.LABEL_FMT.format(int(bucket))
 
 
+class String(SuperGType):
+  class Enum(GTypeEnum):
+    pass
+
+  class Slug(GTypeSlug):
+    pass
+
+
 class Point(SuperGType):
   class _Coordinate(GTypeNumeric):
     LABEL_FMT = '{:+09.4f}'
@@ -523,11 +544,6 @@ class Point(SuperGType):
     BOMB = None
     TAIL = 180.0
     SANE_STEP = GTypeNumeric.depth_step(depth=10, head=HEAD, bomb=TAIL)
-
-
-class Geo(SuperGType):
-  class CountrySlug(GTypeSlug):
-    pass
 
 
 class Datetime(SuperGType):
