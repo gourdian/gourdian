@@ -411,6 +411,8 @@ class GTypeEnum(GTypeNumericBucket):
 
   @classmethod
   def _val_to_enum(cls, val):
+    if pdutils.is_empty(val):
+      return None
     return cls.VALUES[val]
 
   @classmethod
