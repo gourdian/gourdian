@@ -15,6 +15,8 @@ from gourdian.utils import pdutils
 from gourdian.utils import strutils
 
 
+ENDPOINT_RE = '[a-z0-9][a-z0-9_]{2,23}'
+
 USER = 'user'
 DATASET = 'dataset'
 TABLE = 'table'
@@ -83,6 +85,8 @@ class Endpointer:
                       layout=self.layout_name)
 
   def __eq__(self, obj):
+    if isinstance(obj, str):
+      return str(self) == obj
     return ((type(self) == type(obj))
             and (self.endpoint_type == obj.endpoint_type)
             and (self.user_name == obj.user_name)

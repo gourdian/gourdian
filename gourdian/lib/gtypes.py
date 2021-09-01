@@ -15,8 +15,12 @@ from gourdian.utils import pdutils
 
 COERCE = 'coerce'
 
-
 ROUND_UP_CONTEXT = decimal.Context(rounding=decimal.ROUND_HALF_UP)
+
+GTYPE_RE = r'[a-zA-Z0-9][a-zA-Z0-9_]{2,23}'
+SUPER_GTYPE_NAME = 'super_gtype_name'
+GTYPE_NAME = 'gtype_name'
+GTYPE_ID = 'gtype_id'
 
 
 def is_scalar(val):
@@ -32,15 +36,91 @@ def to_numeric(vals):
   return vals
 
 
-def rename(series, suffix=None, default_series=None):
-  name = series.name or getattr(default_series, 'name', None)
-  if name and suffix:
-    return series.rename('%s:%s' % (name, suffix))
-  if name:
-    return series.rename(name)
-  if suffix:
-    return series.rename(suffix)
-  return series
+def parse_qualname(qualname):
+  if isinstance(qualname, Qualname):
+    return qualname
+  return Qualname.from_str(qualname_str=qualname)
+
+
+class Qualname:
+  _QUALNAME_PAT = r'^({sgn})(?:[.]({gtn})(?:[#]({gid}))?)?$'
+  _QUALNAME_RE = re.compile(_QUALNAME_PAT.format(sgn=GTYPE_RE, gtn=GTYPE_RE, gid=GTYPE_RE))
+
+  @classmethod
+  def from_str(cls, qualname_str):
+    if not isinstance(qualname_str, str):
+      raise TypeError('cannot parse non-str: %r' % (qualname_str,))
+    match = cls._QUALNAME_RE.match(qualname_str)
+    if not match:
+      raise ValueError('cannot parse: %r' % (qualname_str,))
+    super_gtype_name, gtype_name, gtype_id = match.groups()
+    return cls(super_gtype_name=super_gtype_name, gtype_name=gtype_name, gtype_id=gtype_id)
+
+  def __init__(self, super_gtype_name, gtype_name, gtype_id):
+    self._super_gtype_name = super_gtype_name
+    self._gtype_name = gtype_name
+    self._gtype_id = gtype_id
+
+  def __repr__(self):
+    return '<%s %r>' % (self.__class__.__name__, str(self))
+
+  def __str__(self):
+    if self.gtype_id:
+      fmt = '{sgn}.{gtn}#{gid}'
+    elif self.gtype_name:
+      fmt = '{sgn}.{gtn}'
+    elif self.super_gtype_name:
+      fmt = '{sgn}'
+    else:
+      fmt = ''
+    return fmt.format(sgn=self.super_gtype_name, gtn=self.gtype_name, gid=self.gtype_id)
+
+  def __eq__(self, obj):
+    if isinstance(obj, str):
+      return str(self) == obj
+    return ((type(self) == type(obj))
+            and (self.qualname_type == obj.qualname_type)
+            and (self.super_gtype_name == obj.super_gtype_name)
+            and (self.gtype_name == obj.gtype_name)
+            and (self.gtype_id == obj.gtype_id))
+
+  def __hash__(self):
+    return hash(str(self))
+
+  def __iter__(self):
+    return itertools.chain((self.super_gtype_name, self.gtype_name, self.gtype_id))
+
+  @property
+  def qualname_type(self):
+    if self.gtype_id:
+      return GTYPE_ID
+    if self.gtype_name:
+      return GTYPE_NAME
+    if self.super_gtype_name:
+      return SUPER_GTYPE_NAME
+    return None
+
+  @property
+  def super_gtype_name(self):
+    return self._super_gtype_name
+
+  @property
+  def gtype_name(self):
+    return self._gtype_name
+
+  @property
+  def gtype_id(self):
+    return self._gtype_id
+
+  @property
+  def basename(self):
+    if self.gtype_name is None:
+      return None
+    return Qualname(
+      super_gtype_name=self.super_gtype_name,
+      gtype_name=self.gtype_name,
+      gtype_id=None,
+    )
 
 
 def super_gtype(name):
@@ -198,6 +278,11 @@ class SuperGType(metaclass=GTypeMeta):
 
 class GType(metaclass=GTypeMeta):
   create_kwargs = None
+
+  @classmethod
+  def qualname(cls):
+    qualname_str = self.__qualname__
+    return Qualname.from_str(qualname_str=qualname_str)
 
   @classmethod
   def _to_series(cls, val):
