@@ -206,6 +206,8 @@ def allocate(csv_path_size, num_groups):
     allocation.group_size.insert(group_index, group_size)
 
   def optimize(allocation, threshold_percent=0.1):
+    if allocation.num_files == 0:
+      return
     while True:
       diff_size = (allocation.group_size[-1] - allocation.group_size[0])
       diff_percent = diff_size / (allocation.group_size[0] or diff_size)
@@ -251,9 +253,10 @@ def _group_out_path(group_num, path, out_dir, relative_to, fmt='%d'):
 def _write_groups(out_dir, relative_to, path, file_splits, num_groups, symlink_ok=True):
   fmt = '%%0%dd' % (len(str(num_groups)),)
   if (len(file_splits) == 1) and file_splits[0].requires_split is False:
+    import pdb; pdb.set_trace()
     group_num, _, _ = file_splits[0]
     out_path = _group_out_path(group_num=group_num, path=path, out_dir=out_dir,
-                               relative_to=relative_to, fmt=fmt)
+                               relative_to=relative_to, fmt=fmt)/'rows.csv'
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if symlink_ok:
       os.symlink(src=path, dst=out_path)
@@ -300,22 +303,24 @@ def balance(csv_paths, out_dir, num_groups=None, max_workers=None, relative_to=N
   logging.info('allocating csvs into %s groups...' % num_groups)
   allocation = allocate(csv_path_size=tuple(csv_path_weights.items()), num_groups=num_groups)
   logging.info(allocation)
-  # Perform all required splits into their split_num directory.
-  relative_to = relative_to or os.path.commonpath(csv_paths)
-  file_splits = allocation.file_splits()
-  job_kw = {'out_dir': str(out_dir), 'relative_to': str(relative_to), 'num_groups': num_groups,
-            'symlink_ok': symlink_ok}
-  jobs = ((_write_groups, dict(path=str(path), file_splits=fs, **job_kw))
-          for path, fs in file_splits.items())
-  with tqdm.tqdm(desc=tqdm_desc, total=sum(csv_path_weights.values()),
-                 mininterval=1, maxinterval=1) as tq:
-    with futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
-      pending = set(pool.submit(fn, **kw) for fn, kw in itertools.islice(jobs, max_workers * 2))
-      while pending:
-        done, pending = futures.wait(pending, return_when=futures.FIRST_COMPLETED)
-        for job in done:
-          finished_path = pathlib.Path(job.result())
-          tq.update(csv_path_weights[finished_path])
-        for fn, kw in itertools.islice(jobs, len(done)):
-          pending.add(pool.submit(fn, **kw))
+  if allocation.num_files > 0:
+    # Perform all required splits into their split_num directory.
+    relative_to = relative_to or os.path.commonpath(csv_paths)
+    file_splits = allocation.file_splits()
+    job_kw = {'out_dir': str(out_dir), 'relative_to': str(relative_to), 'num_groups': num_groups,
+              'symlink_ok': symlink_ok}
+    jobs = ((_write_groups, dict(path=str(path), file_splits=fs, **job_kw))
+            for path, fs in file_splits.items())
+    with tqdm.tqdm(desc=tqdm_desc, total=sum(csv_path_weights.values()),
+                   mininterval=1, maxinterval=1) as tq:
+      with futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+      #with futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
+        pending = set(pool.submit(fn, **kw) for fn, kw in itertools.islice(jobs, max_workers * 2))
+        while pending:
+          done, pending = futures.wait(pending, return_when=futures.FIRST_COMPLETED)
+          for job in done:
+            finished_path = pathlib.Path(job.result())
+            tq.update(csv_path_weights[finished_path])
+          for fn, kw in itertools.islice(jobs, len(done)):
+            pending.add(pool.submit(fn, **kw))
   return allocation

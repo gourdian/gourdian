@@ -7,7 +7,13 @@ class JSONEncoder(json.JSONEncoder):
   def default(self, obj):
     if isinstance(obj, np.int64):
       return int(obj)
+    if isinstance(obj, datetime.datetime):
+      return obj.isoformat()
     return json.JSONEncoder.default(self, obj)
+
+
+def json_dumps(obj):
+  return json.dumps(obj, cls=JSONEncoder)
 
 
 def is_empty(val, unset=None):

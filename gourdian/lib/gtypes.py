@@ -2,7 +2,6 @@ import collections
 import collections.abc
 import datetime
 import decimal
-import hashlib
 import math
 import numpy as np
 import pandas as pd
@@ -44,7 +43,7 @@ def parse_qualname(qualname):
 
 class Qualname:
   _QUALNAME_PAT = r'^({sgn})(?:[.]({gtn})(?:[#]({gid}))?)?$'
-  _QUALNAME_RE = re.compile(_QUALNAME_PAT.format(sgn=GTYPE_RE, gtn=GTYPE_RE, gid=GTYPE_RE))
+  _QUALNAME_RE = re.compile(_QUALNAME_PAT.format(sgn=GTYPE_RE, gtn=GTYPE_RE, gid=r'[^#]+'))
 
   @classmethod
   def from_str(cls, qualname_str):
@@ -133,8 +132,10 @@ def gtype(qualname, create_kwargs=None):
 
   If create_kwargs are provided, the requested gtype's create() method is called with those args.
   """
+  qualname = Qualname.from_str(qualname_str=str(qualname))
   gtype = GTypeMeta.gtype(qualname=qualname)
-  return gtype.create(**create_kwargs) if create_kwargs is not None else gtype
+  gtype_id = qualname.gtype_id
+  return gtype.create(gtype_id=gtype_id, **create_kwargs) if create_kwargs is not None else gtype
 
 
 def all_gtypes():
@@ -223,9 +224,10 @@ class GTypeMeta(type):
       for gtype in klass.gtypes:
         gtype.super_gtype = klass
     elif issubclass(klass, GType):
-      klass.qualname = '.'.join(klass.__qualname__.rsplit('.', 2)[-2:])
-      klass.name = klass.qualname.split('.')[-1]
-      cls._GTYPES[klass.qualname] = klass
+      # TODO(rob): Does assigning klass.qualname conflict with GType.qualname()...
+      klass.qualname = klass.__qualname__
+      klass.name = Qualname.from_str(qualname_str=klass.__qualname__).gtype_name
+      cls._GTYPES[str(klass.qualname)] = klass
       # If the super_gtype has already been created, associate it now.
       super_gtype_name = klass.qualname.split('.', 1)[0]
       if super_gtype_name in cls._SUPER_GTYPES:
@@ -252,7 +254,9 @@ class GTypeMeta(type):
 
   @classmethod
   def gtype(cls, qualname):
-    return cls._GTYPES[qualname]
+    qualname = Qualname.from_str(qualname_str=str(qualname))
+    basename = qualname.basename
+    return cls._GTYPES[basename]
 
   @classmethod
   def all_gtypes(cls):
@@ -459,9 +463,9 @@ class GTypeEnum(GTypeNumericBucket):
   LABEL_FMT = '{:d}'
 
   @classmethod
-  def create(cls, values):
+  def create(cls, gtype_id, values):
     values = dict(values) if isinstance(values, dict) else {v: i for i, v in enumerate(values)}
-    name = 'Enum#%s' % (hashlib.md5(repr(values).encode('utf-8')).hexdigest(),)
+    name = 'Enum#%s' % (gtype_id,)
     return type(name, (cls,), {
       '__qualname__': 'String.%s' % (name,),
       'create_kwargs': {'values': values},

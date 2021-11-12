@@ -21,6 +21,7 @@ USER = 'user'
 DATASET = 'dataset'
 TABLE = 'table'
 LAYOUT = 'layout'
+UPLOAD = 'upload'
 
 
 def parse_endpointer(endpointer):
@@ -55,23 +56,31 @@ class Endpointer:
     return cls(user_name=user_name, dataset_name=dataset_name, table_name=table_name,
                layout_name=layout_name)
 
-  def __init__(self, user_name=None, dataset_name=None, table_name=None, layout_name=None):
+  def __init__(self, user_name=None, dataset_name=None, table_name=None, layout_name=None,
+               upload_hash=None):
     if dataset_name and not user_name:
       raise ValueError('dataset_name requires user_name: user_name=%r' % (user_name,))
     if table_name and not dataset_name:
       raise ValueError('table_name requires dataset_name: dataset_name=%r' % (dataset_name,))
     if layout_name and not table_name:
       raise ValueError('layout_name requires table_name: table_name=%r' % (table_name,))
+    if upload_hash and not table_name:
+      raise ValueError('upload_hash requires table_name: table_name=%r' % (table_name,))
+    if upload_hash and layout_name:
+      raise ValueError('upload_hash must not have layout_name: layout_name=%r' % (layout_name,))
     self._user_name = user_name
     self._dataset_name = dataset_name
     self._table_name = table_name
     self._layout_name = layout_name
+    self._upload_hash = upload_hash
 
   def __repr__(self):
     return '<%s %r>' % (self.__class__.__name__, str(self))
 
   def __str__(self):
-    if self.layout_name:
+    if self.upload_hash:
+      fmt = '{user}/{dataset}.{table}${upload}'
+    elif self.layout_name:
       fmt = '{user}/{dataset}.{table}@{layout}'
     elif self.table_name:
       fmt = '{user}/{dataset}.{table}'
@@ -82,7 +91,7 @@ class Endpointer:
     else:
       fmt = ''
     return fmt.format(user=self.user_name, dataset=self.dataset_name, table=self.table_name,
-                      layout=self.layout_name)
+                      layout=self.layout_name, upload=self.upload_hash)
 
   def __eq__(self, obj):
     if isinstance(obj, str):
@@ -92,7 +101,8 @@ class Endpointer:
             and (self.user_name == obj.user_name)
             and (self.dataset_name == obj.dataset_name)
             and (self.table_name == obj.table_name)
-            and (self.layout_name == obj.layout_name))
+            and (self.layout_name == obj.layout_name)
+            and (self.upload_hash == obj.upload_hash))
 
   def __hash__(self):
     return hash(str(self))
@@ -102,6 +112,8 @@ class Endpointer:
 
   @property
   def endpoint_type(self):
+    if self.upload_hash:
+      return UPLOAD
     if self.layout_name:
       return LAYOUT
     if self.table_name:
@@ -129,6 +141,10 @@ class Endpointer:
     return self._layout_name
 
   @property
+  def upload_hash(self):
+    return self._upload_hash
+
+  @property
   def user_endpointer(self):
     if self.user_name is None:
       return None
@@ -154,12 +170,20 @@ class Endpointer:
     return Endpointer(user_name=self.user_name, dataset_name=self.dataset_name,
                       table_name=self.table_name, layout_name=self.layout_name)
 
+  @property
+  def upload_endpointer(self):
+    if self.upload_hash is None:
+      return None
+    return Endpointer(user_name=self.user_name, dataset_name=self.dataset_name,
+                      table_name=self.table_name, upload_hash=self.upload_hash)
+
   def to_dict(self):
     return dict(
       user_name=self.user_name,
       dataset_name=self.dataset_name,
       table_name=self.table_name,
       layout_name=self.layout_name,
+      upload_hash=self.upload_hash,
     )
 
 
