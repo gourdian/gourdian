@@ -300,7 +300,7 @@ class GTypeTarget(HowTarget):
 
   @property
   def name(self):
-    return self._gtype.qualname
+    return str(self._gtype.qualname())
 
   @property
   def gtype(self):

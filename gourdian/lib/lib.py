@@ -726,7 +726,7 @@ class LabelColumn:
       cls=self.__class__.__name__,
       name=repr(self.name),
       endpointer=repr(str(self.layout.endpointer)),
-      gtype=self.gtype.qualname if self.gtype else None,
+      gtype=str(self.gtype.qualname()) if self.gtype else None,
       label_kwargs=('(%s)' % (label_str,) if label_str else ''),
     )
 

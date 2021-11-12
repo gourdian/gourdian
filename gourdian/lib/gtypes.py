@@ -35,18 +35,14 @@ def to_numeric(vals):
   return vals
 
 
-def parse_qualname(qualname):
-  if isinstance(qualname, Qualname):
-    return qualname
-  return Qualname.from_str(qualname_str=qualname)
-
-
 class Qualname:
   _QUALNAME_PAT = r'^({sgn})(?:[.]({gtn})(?:[#]({gid}))?)?$'
   _QUALNAME_RE = re.compile(_QUALNAME_PAT.format(sgn=GTYPE_RE, gtn=GTYPE_RE, gid=r'[^#]+'))
 
   @classmethod
   def from_str(cls, qualname_str):
+    if isinstance(qualname_str, cls):
+      return qualname_str
     if not isinstance(qualname_str, str):
       raise TypeError('cannot parse non-str: %r' % (qualname_str,))
     match = cls._QUALNAME_RE.match(qualname_str)
@@ -133,7 +129,7 @@ def gtype(qualname, create_kwargs=None):
   If create_kwargs are provided, the requested gtype's create() method is called with those args.
   """
   qualname = Qualname.from_str(qualname_str=str(qualname))
-  gtype = GTypeMeta.gtype(qualname=qualname)
+  gtype = GTypeMeta.base_gtype(qualname=qualname)
   gtype_id = qualname.gtype_id
   return gtype.create(gtype_id=gtype_id, **create_kwargs) if create_kwargs is not None else gtype
 
@@ -166,7 +162,7 @@ class GTypeLabeler:
   def __repr__(self):
     kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
     kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
-    return ('<%s %s(%s)>' % (self.__class__.__name__, self._gtype.qualname, kw_str))
+    return ('<%s %s(%s)>' % (self.__class__.__name__, self._gtype.qualname(), kw_str))
 
   def __str__(self):
     return self.name
@@ -176,7 +172,7 @@ class GTypeLabeler:
     if self._name is None:
       kw = ((k, v) for k, v in self._kwargs.items() if not pdutils.is_empty(v))
       kw_str = ', '.join('%s=%r' % (k, v) for k, v in kw)
-      self._name = '%s(%s)' % (self._gtype.qualname, kw_str)
+      self._name = '%s(%s)' % (self._gtype.qualname(), kw_str)
     return self._name
 
   @property
@@ -225,11 +221,12 @@ class GTypeMeta(type):
         gtype.super_gtype = klass
     elif issubclass(klass, GType):
       # TODO(rob): Does assigning klass.qualname conflict with GType.qualname()...
-      klass.qualname = klass.__qualname__
-      klass.name = Qualname.from_str(qualname_str=klass.__qualname__).gtype_name
-      cls._GTYPES[str(klass.qualname)] = klass
+      # klass.qualname = klass.__qualname__
+      qualname = klass.qualname()
+      klass.name = qualname.gtype_name
+      cls._GTYPES[str(qualname)] = klass
       # If the super_gtype has already been created, associate it now.
-      super_gtype_name = klass.qualname.split('.', 1)[0]
+      super_gtype_name = str(qualname).split('.', 1)[0]
       if super_gtype_name in cls._SUPER_GTYPES:
         super_gtype = cls.super_gtype(name=super_gtype_name)
         klass.super_gtype = super_gtype
@@ -240,12 +237,12 @@ class GTypeMeta(type):
 
   def __repr__(cls):
     if issubclass(cls, GType):
-      return '<gtype %s>' % (cls.qualname,)
+      return '<gtype %s>' % (cls.qualname(),)
     return '<super_gtype %s>' % (cls.name,)
 
   def __str__(cls):
     if issubclass(cls, GType):
-      return cls.qualname
+      return str(cls.qualname())
     return cls.name
 
   @classmethod
@@ -253,7 +250,7 @@ class GTypeMeta(type):
     return cls._SUPER_GTYPES[name]
 
   @classmethod
-  def gtype(cls, qualname):
+  def base_gtype(cls, qualname):
     qualname = Qualname.from_str(qualname_str=str(qualname))
     basename = qualname.basename
     return cls._GTYPES[basename]
@@ -272,9 +269,13 @@ class GTypeMeta(type):
 
 class SuperGType(metaclass=GTypeMeta):
   @classmethod
-  def gtype(cls, name):
+  def qualname(cls):
+    return Qualname.from_str(qualname_str=cls.__name__)
+
+  @classmethod
+  def base_gtype(cls, name):
     qualname = '{}.{}'.format(cls.__name__, name)
-    return GTypeMeta.gtype(qualname)
+    return GTypeMeta.base_gtype(qualname)
 
   def __str__(self):
     return self.name
@@ -285,7 +286,7 @@ class GType(metaclass=GTypeMeta):
 
   @classmethod
   def qualname(cls):
-    qualname_str = self.__qualname__
+    qualname_str = cls.__qualname__
     return Qualname.from_str(qualname_str=qualname_str)
 
   @classmethod
@@ -296,7 +297,7 @@ class GType(metaclass=GTypeMeta):
       raise ValueError("cannot convert DataFrame to Series; try df['col_name']")
     else:
       series = pd.Series(val)
-    return series.rename(series.name or cls.qualname)
+    return series.rename(series.name or str(cls.qualname()))
 
   @classmethod
   def is_valid(cls, val):
