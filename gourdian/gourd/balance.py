@@ -253,7 +253,6 @@ def _group_out_path(group_num, path, out_dir, relative_to, fmt='%d'):
 def _write_groups(out_dir, relative_to, path, file_splits, num_groups, symlink_ok=True):
   fmt = '%%0%dd' % (len(str(num_groups)),)
   if (len(file_splits) == 1) and file_splits[0].requires_split is False:
-    import pdb; pdb.set_trace()
     group_num, _, _ = file_splits[0]
     out_path = _group_out_path(group_num=group_num, path=path, out_dir=out_dir,
                                relative_to=relative_to, fmt=fmt)/'rows.csv'

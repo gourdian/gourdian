@@ -252,7 +252,7 @@ class GTypeMeta(type):
   @classmethod
   def base_gtype(cls, qualname):
     qualname = Qualname.from_str(qualname_str=str(qualname))
-    basename = qualname.basename
+    basename = str(qualname.basename)
     return cls._GTYPES[basename]
 
   @classmethod
