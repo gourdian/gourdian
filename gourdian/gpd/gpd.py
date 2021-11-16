@@ -190,6 +190,32 @@ class How:
   Optional coax_kwargs allow df[via_column] to be transformed during the df->gtype phase; supported
   kwargs are gtype-dependent and are provided to the gtype's coax method as gtype.coax(**kwargs).
   """
+
+  @classmethod
+  def from_js(cls, how_js):
+    target_js = how_js['target']
+    return cls(
+      name=how_js['name'],
+      target=GTypeTarget(
+        gtype=gtypes.gtype(
+          qualname=target_js['gtype']['qualname'],
+          create_kwargs=target_js['gtype']['create_kwargs'],
+        ),
+      ),
+      via_column=how_js['via_column'],
+      coax_kwargs=how_js['coax_kwargs'],
+    )
+
+  def to_js(self):
+    return {
+      'name': self.name,
+      'target': {
+        'gtype': self.target.gtype.to_js(),
+      },
+      'via_column': self.via_column,
+      'coax_kwargs': self.coax_kwargs,
+    }
+
   def __init__(self, target, via_column=None, name=None, bounds=None, **coax_kwargs):
     self._target = parse_target(obj=target)
     self._via_column = via_column
@@ -267,6 +293,7 @@ class How:
 
   def coax(self, obj):
     return self.target.gtype.coax(obj=obj, **self.coax_kwargs)
+
 
 
 class HowTarget:

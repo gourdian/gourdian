@@ -285,6 +285,13 @@ class GType(metaclass=GTypeMeta):
   create_kwargs = None
 
   @classmethod
+  def to_js(cls):
+    return {
+      'qualname': str(cls.qualname()),
+      'create_kwargs': cls.create_kwargs,
+    }
+
+  @classmethod
   def qualname(cls):
     qualname_str = cls.__qualname__
     return Qualname.from_str(qualname_str=qualname_str)
